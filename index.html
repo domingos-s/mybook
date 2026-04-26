@@ -74,16 +74,40 @@
           <div class="post-author"></div>
           <div class="post-date"></div>
         </div>
-        <button class="delete-post" title="Delete memory">×</button>
+        <button type="button" class="edit-post action-btn" title="Edit memory">Edit</button>
+        <button type="button" class="delete-post action-btn danger-text" title="Delete memory">Delete</button>
       </div>
       <p class="post-text"></p>
+      <div class="post-edit-editor inline-editor hidden">
+        <textarea class="post-edit-input inline-editor-input" rows="3" maxlength="1000"></textarea>
+        <div class="inline-editor-actions">
+          <button type="button" class="post-edit-cancel action-btn">Cancel</button>
+          <button type="button" class="post-edit-save action-btn primary-text">Save</button>
+        </div>
+      </div>
       <div class="post-media"></div>
       <div class="tag-list"></div>
       <div class="post-actions">
         <button class="like-btn">👍 Like</button>
       </div>
       <section class="comments">
-        <div class="comment-list"></div>
+        <div class="comment-list">
+          <div class="comment-item comment-template hidden">
+            <div class="comment-author"></div>
+            <div class="comment-text"></div>
+            <div class="comment-actions">
+              <button type="button" class="action-btn comment-edit">Edit</button>
+              <button type="button" class="action-btn danger-text comment-delete">Delete</button>
+            </div>
+            <div class="inline-editor comment-editor hidden">
+              <textarea class="inline-editor-input comment-edit-input" rows="2" maxlength="280"></textarea>
+              <div class="inline-editor-actions">
+                <button type="button" class="action-btn comment-edit-cancel">Cancel</button>
+                <button type="button" class="action-btn primary-text comment-edit-save">Save</button>
+              </div>
+            </div>
+          </div>
+        </div>
         <form class="comment-form">
           <input class="comment-input" type="text" maxlength="280" placeholder="Write a comment..." />
           <button type="submit" class="ghost">Comment</button>

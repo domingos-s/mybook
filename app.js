@@ -117,6 +117,28 @@ function renderMediaPreview() {
   });
 }
 
+function updatePost(postId, updater) {
+  state.posts = state.posts.map((post) => (post.id === postId ? updater(post) : post));
+  save();
+  renderPosts();
+}
+
+function updateComment(postId, commentId, updater) {
+  updatePost(postId, (post) => ({
+    ...post,
+    comments: (Array.isArray(post.comments) ? post.comments : []).map((comment) => (
+      comment.id === commentId ? updater(comment) : comment
+    )),
+  }));
+}
+
+function deleteComment(postId, commentId) {
+  updatePost(postId, (post) => ({
+    ...post,
+    comments: (Array.isArray(post.comments) ? post.comments : []).filter((comment) => comment.id !== commentId),
+  }));
+}
+
 function renderPosts() {
   const q = els.searchInput.value.trim().toLowerCase();
   const order = els.sortSelect.value;
@@ -142,6 +164,10 @@ function renderPosts() {
     node.querySelector('.post-date').textContent = formatDate(post.date || post.createdAt);
     node.querySelector('.post-text').textContent = post.text;
 
+    const postText = node.querySelector('.post-text');
+    const postEditor = node.querySelector('.post-edit-editor');
+    const postEditInput = node.querySelector('.post-edit-input');
+
     const mediaHost = node.querySelector('.post-media');
     (post.media || []).forEach((m) => {
       const mediaEl = document.createElement(m.type === 'video' ? 'video' : 'img');
@@ -162,9 +188,7 @@ function renderPosts() {
     likeBtn.classList.toggle('active', !!post.liked);
     likeBtn.textContent = post.liked ? '👍 Liked' : '👍 Like';
     likeBtn.addEventListener('click', () => {
-      post.liked = !post.liked;
-      save();
-      renderPosts();
+      updatePost(post.id, (existing) => ({ ...existing, liked: !existing.liked }));
     });
 
     node.querySelector('.delete-post').addEventListener('click', () => {
@@ -173,21 +197,84 @@ function renderPosts() {
       renderPosts();
     });
 
+    const postEditBtn = node.querySelector('.edit-post');
+    const postEditCancelBtn = node.querySelector('.post-edit-cancel');
+    const postEditSaveBtn = node.querySelector('.post-edit-save');
+
+    postEditBtn.addEventListener('click', () => {
+      postEditInput.value = post.text || '';
+      postText.classList.add('hidden');
+      postEditor.classList.remove('hidden');
+      postEditInput.focus();
+    });
+
+    postEditCancelBtn.addEventListener('click', () => {
+      postEditor.classList.add('hidden');
+      postText.classList.remove('hidden');
+    });
+
+    postEditSaveBtn.addEventListener('click', () => {
+      const nextText = postEditInput.value.trim();
+      if (!nextText && (!Array.isArray(post.media) || post.media.length === 0)) return;
+
+      updatePost(post.id, (existing) => ({
+        ...existing,
+        text: nextText,
+        updatedAt: new Date().toISOString(),
+      }));
+    });
+
     const commentList = node.querySelector('.comment-list');
+    const commentTemplate = commentList.querySelector('.comment-template');
     const comments = Array.isArray(post.comments) ? post.comments : [];
     comments.forEach((comment) => {
-      const item = document.createElement('div');
-      item.className = 'comment-item';
+      const item = commentTemplate.cloneNode(true);
+      item.classList.remove('comment-template', 'hidden');
 
-      const author = document.createElement('div');
-      author.className = 'comment-author';
+      const author = item.querySelector('.comment-author');
       author.textContent = state.profile.name;
 
-      const text = document.createElement('div');
-      text.className = 'comment-text';
+      const text = item.querySelector('.comment-text');
       text.textContent = comment.text;
 
-      item.append(author, text);
+      const actionRow = item.querySelector('.comment-actions');
+      const editBtn = item.querySelector('.comment-edit');
+      const deleteBtn = item.querySelector('.comment-delete');
+
+      const editor = item.querySelector('.comment-editor');
+      const editorInput = item.querySelector('.comment-edit-input');
+      const cancelBtn = item.querySelector('.comment-edit-cancel');
+      const saveBtn = item.querySelector('.comment-edit-save');
+
+      editBtn.addEventListener('click', () => {
+        editorInput.value = comment.text || '';
+        text.classList.add('hidden');
+        actionRow.classList.add('hidden');
+        editor.classList.remove('hidden');
+        editorInput.focus();
+      });
+
+      cancelBtn.addEventListener('click', () => {
+        editor.classList.add('hidden');
+        text.classList.remove('hidden');
+        actionRow.classList.remove('hidden');
+      });
+
+      saveBtn.addEventListener('click', () => {
+        const nextText = editorInput.value.trim();
+        if (!nextText) return;
+
+        updateComment(post.id, comment.id, (existingComment) => ({
+          ...existingComment,
+          text: nextText,
+          updatedAt: new Date().toISOString(),
+        }));
+      });
+
+      deleteBtn.addEventListener('click', () => {
+        deleteComment(post.id, comment.id);
+      });
+
       commentList.append(item);
     });
 
@@ -197,16 +284,18 @@ function renderPosts() {
       const text = input.value.trim();
       if (!text) return;
 
-      if (!Array.isArray(post.comments)) post.comments = [];
-      post.comments.push({
+      const newComment = {
         id: crypto.randomUUID(),
         text,
         createdAt: new Date().toISOString(),
-      });
+      };
+
+      updatePost(post.id, (existing) => ({
+        ...existing,
+        comments: [...(Array.isArray(existing.comments) ? existing.comments : []), newComment],
+      }));
 
       input.value = '';
-      save();
-      renderPosts();
     });
 
     els.feedList.append(node);
