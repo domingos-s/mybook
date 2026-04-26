@@ -267,6 +267,7 @@ function normalizePreferences(preferences = {}) {
 function normalizeConnections(connections = {}) {
   const incomingPeers = connections.peersById && typeof connections.peersById === 'object' ? connections.peersById : {};
   const peersById = {};
+  const identity = connections.identity && typeof connections.identity === 'object' ? connections.identity : {};
 
   Object.keys(incomingPeers).forEach((peerId) => {
     const peer = incomingPeers[peerId] || {};
@@ -275,6 +276,7 @@ function normalizeConnections(connections = {}) {
       displayName: typeof peer.displayName === 'string' ? peer.displayName : '',
       trustState: ['pending', 'trusted', 'blocked'].includes(peer.trustState) ? peer.trustState : 'pending',
       lastSyncAt: typeof peer.lastSyncAt === 'string' ? peer.lastSyncAt : '',
+      publicKeyJwk: peer.publicKeyJwk && typeof peer.publicKeyJwk === 'object' ? peer.publicKeyJwk : null,
     };
   });
 
@@ -284,6 +286,11 @@ function normalizeConnections(connections = {}) {
     displayName: typeof connections.displayName === 'string' ? connections.displayName : '',
     signalingEndpoint: typeof connections.signalingEndpoint === 'string' ? connections.signalingEndpoint : '',
     peersById,
+    identity: {
+      publicKeyJwk: identity.publicKeyJwk && typeof identity.publicKeyJwk === 'object' ? identity.publicKeyJwk : null,
+      privateKeyJwk: identity.privateKeyJwk && typeof identity.privateKeyJwk === 'object' ? identity.privateKeyJwk : null,
+      generatedAt: typeof identity.generatedAt === 'string' ? identity.generatedAt : '',
+    },
   };
 }
 
@@ -297,6 +304,7 @@ function normalizeComment(comment = {}) {
 }
 
 function normalizePost(post = {}) {
+  const importedFrom = post.importedFrom && typeof post.importedFrom === 'object' ? post.importedFrom : null;
   return {
     id: typeof post.id === 'string' ? post.id : crypto.randomUUID(),
     text: typeof post.text === 'string' ? post.text : '',
@@ -314,6 +322,13 @@ function normalizePost(post = {}) {
       : [],
     liked: Boolean(post.liked),
     comments: Array.isArray(post.comments) ? post.comments.map(normalizeComment).filter((c) => c.text.trim()) : [],
+    importedFrom: importedFrom
+      ? {
+        senderId: typeof importedFrom.senderId === 'string' ? importedFrom.senderId : '',
+        displayName: typeof importedFrom.displayName === 'string' ? importedFrom.displayName : '',
+        exportedAt: typeof importedFrom.exportedAt === 'string' ? importedFrom.exportedAt : '',
+      }
+      : null,
   };
 }
 
@@ -653,7 +668,16 @@ function renderPosts() {
       miniAvatar.style.backgroundPosition = '';
       miniAvatar.textContent = initials(state.data.profile.name);
     }
-    node.querySelector('.post-author').textContent = state.data.profile.name;
+    const authorEl = node.querySelector('.post-author');
+    const senderMeta = post.importedFrom;
+    authorEl.textContent = state.data.profile.name;
+    if (senderMeta?.senderId) {
+      const senderLine = document.createElement('div');
+      senderLine.className = 'post-imported-from';
+      const senderDate = senderMeta.exportedAt ? ` • ${formatDate(senderMeta.exportedAt)}` : '';
+      senderLine.textContent = `Shared by ${senderMeta.displayName || 'Unknown'} (${senderMeta.senderId})${senderDate}`;
+      authorEl.append(document.createElement('br'), senderLine);
+    }
     node.querySelector('.post-date').textContent = formatDate(post.date || post.createdAt);
     node.querySelector('.post-text').textContent = post.text;
 
@@ -717,7 +741,7 @@ function renderPosts() {
         return;
       }
 
-      downloadMemoryShare(post);
+      await downloadMemoryShare(post);
       toast('Memory share JSON downloaded.');
     });
 
@@ -1208,17 +1232,18 @@ function trackPeerConnection(peerId, displayName, trustState = 'trusted') {
       displayName: displayName || existing.displayName || '',
       trustState,
       lastSyncAt: new Date().toISOString(),
+      publicKeyJwk: existing.publicKeyJwk || null,
     };
   }, { render: false });
 }
 
 async function applyIncomingMemoryShare(message) {
-  const posts = Array.isArray(message.payload?.posts) ? message.payload.posts : [];
-  if (!posts.length) return 0;
+  const memoryShares = Array.isArray(message.payload?.posts) ? message.payload.posts : [];
+  if (!memoryShares.length) return 0;
 
   let importedCount = 0;
-  for (const post of posts) {
-    const merged = importMemoryShare({ kind: 'mybook-memory-share', post }, { onConflict: 'generate' });
+  for (const share of memoryShares) {
+    const merged = await importMemoryShare(share, { onConflict: 'generate' });
     if (merged) importedCount += 1;
   }
   return importedCount;
@@ -1275,11 +1300,15 @@ async function handleProtocolMessage(raw) {
 
 function setupDataChannel(dc) {
   state.connectionRuntime.dc = dc;
-  dc.addEventListener('open', () => {
+  dc.addEventListener('open', async () => {
     renderConnectionStatus('Secure channel open. Syncing...');
     sendProtocolMessage('hello', { app: 'mybook' });
-    const posts = state.data.postOrder.slice(0, 50).map((id) => normalizePost(state.data.postsById[id])).filter(Boolean);
-    sendProtocolMessage('memory-share', { posts });
+    const posts = state.data.postOrder.slice(0, 50).map((id) => state.data.postsById[id]).filter(Boolean);
+    const signedPosts = [];
+    for (const post of posts) {
+      signedPosts.push(await buildMemorySharePayload(post));
+    }
+    sendProtocolMessage('memory-share', { posts: signedPosts });
   });
   dc.addEventListener('message', (event) => {
     void handleProtocolMessage(event.data);
@@ -1664,20 +1693,101 @@ async function quickSharePost(post) {
   toast('Sharing is not available on this browser.', 'warn');
 }
 
-function buildMemorySharePayload(post) {
+function bytesToBase64(bytes) {
+  let binary = '';
+  bytes.forEach((byte) => {
+    binary += String.fromCharCode(byte);
+  });
+  return btoa(binary);
+}
+
+function base64ToBytes(base64) {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+
+function stableSerialize(value) {
+  if (Array.isArray(value)) return `[${value.map(stableSerialize).join(',')}]`;
+  if (value && typeof value === 'object') {
+    const keys = Object.keys(value).sort();
+    return `{${keys.map((key) => `${JSON.stringify(key)}:${stableSerialize(value[key])}`).join(',')}}`;
+  }
+  return JSON.stringify(value);
+}
+
+async function ensureProfileIdentity() {
+  const existing = state.data.connections.identity || {};
+  if (existing.privateKeyJwk && existing.publicKeyJwk) return existing;
+
+  const pair = await crypto.subtle.generateKey(
+    { name: 'ECDSA', namedCurve: 'P-256' },
+    true,
+    ['sign', 'verify'],
+  );
+  const [privateKeyJwk, publicKeyJwk] = await Promise.all([
+    crypto.subtle.exportKey('jwk', pair.privateKey),
+    crypto.subtle.exportKey('jwk', pair.publicKey),
+  ]);
+  const generatedAt = new Date().toISOString();
+  updateState((draft) => {
+    draft.connections.identity = { privateKeyJwk, publicKeyJwk, generatedAt };
+  }, { render: false });
+  return { privateKeyJwk, publicKeyJwk, generatedAt };
+}
+
+async function signMemoryShareContent(sender, post) {
+  const identity = await ensureProfileIdentity();
+  const privateKey = await crypto.subtle.importKey(
+    'jwk',
+    identity.privateKeyJwk,
+    { name: 'ECDSA', namedCurve: 'P-256' },
+    false,
+    ['sign'],
+  );
+  const payloadToSign = stableSerialize({
+    sender,
+    post,
+  });
+  const hashBuffer = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(payloadToSign));
+  const signatureBuffer = await crypto.subtle.sign(
+    { name: 'ECDSA', hash: 'SHA-256' },
+    privateKey,
+    hashBuffer,
+  );
+  return {
+    hash: bytesToBase64(new Uint8Array(hashBuffer)),
+    signature: bytesToBase64(new Uint8Array(signatureBuffer)),
+    publicKeyJwk: identity.publicKeyJwk,
+  };
+}
+
+async function buildMemorySharePayload(post) {
+  const normalizedPost = normalizePost(post);
+  const sender = {
+    senderId: state.data.connections.peerId,
+    displayName: state.data.connections.displayName || state.data.profile.name || 'Mybook User',
+    exportedAt: new Date().toISOString(),
+  };
+  const integrity = await signMemoryShareContent(sender, normalizedPost);
   return {
     kind: 'mybook-memory-share',
     version: 1,
     exportedAt: new Date().toISOString(),
+    sender,
+    hash: integrity.hash,
+    signature: integrity.signature,
+    signerPublicKey: integrity.publicKeyJwk,
     post: {
-      ...normalizePost(post),
+      ...normalizedPost,
       id: post.id,
     },
   };
 }
 
-function downloadMemoryShare(post) {
-  const payload = buildMemorySharePayload(post);
+async function downloadMemoryShare(post) {
+  const payload = await buildMemorySharePayload(post);
   const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -1687,14 +1797,121 @@ function downloadMemoryShare(post) {
   URL.revokeObjectURL(url);
 }
 
-function importMemoryShare(raw, options = {}) {
+async function verifyMemoryShareSignature(raw, post, sender) {
+  try {
+    const payloadToVerify = stableSerialize({ sender, post });
+    const hashBuffer = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(payloadToVerify));
+    const computedHash = bytesToBase64(new Uint8Array(hashBuffer));
+    if (computedHash !== raw.hash) return { valid: false, fingerprint: '' };
+
+    const publicKey = await crypto.subtle.importKey(
+      'jwk',
+      raw.signerPublicKey,
+      { name: 'ECDSA', namedCurve: 'P-256' },
+      false,
+      ['verify'],
+    );
+    const ok = await crypto.subtle.verify(
+      { name: 'ECDSA', hash: 'SHA-256' },
+      publicKey,
+      base64ToBytes(raw.signature),
+      hashBuffer,
+    );
+    const fingerprint = computedHash.slice(0, 16);
+    return { valid: Boolean(ok), fingerprint };
+  } catch {
+    return { valid: false, fingerprint: '' };
+  }
+}
+
+async function confirmSenderTrust(sender, signerPublicKey, fingerprint) {
+  const senderId = sender.senderId || `unknown-${fingerprint}`;
+  const existing = state.data.connections.peersById[senderId];
+  if (existing?.trustState === 'blocked') {
+    toast('Import blocked: sender is blocked on this device.', 'warn');
+    return 'blocked';
+  }
+  if (existing?.trustState === 'trusted') {
+    const knownKey = existing.publicKeyJwk ? stableSerialize(existing.publicKeyJwk) : '';
+    const incomingKey = signerPublicKey ? stableSerialize(signerPublicKey) : '';
+    if (knownKey && incomingKey && knownKey !== incomingKey) {
+      const proceed = await showModalMessage({
+        title: 'Sender key changed',
+        message: `Trusted sender ${existing.displayName || senderId} has a different signing key.\nFingerprint: ${fingerprint || 'n/a'}`,
+        confirmText: 'Trust new key',
+        cancelText: 'Block sender',
+        showCancel: true,
+      });
+      if (!proceed) {
+        updateState((draft) => {
+          draft.connections.peersById[senderId] = {
+            ...existing,
+            trustState: 'blocked',
+            lastSyncAt: new Date().toISOString(),
+          };
+        }, { render: false });
+        return 'blocked';
+      }
+    } else {
+      return 'trusted';
+    }
+  }
+
+  const trustChoice = await showModalMessage({
+    title: 'Trust this sender?',
+    message: `${sender.displayName || 'Unknown sender'} (${senderId}) wants to share memory.\nFingerprint: ${fingerprint || 'n/a'}`,
+    confirmText: 'Trust sender',
+    cancelText: 'Block sender',
+    showCancel: true,
+  });
+
+  const nextTrustState = trustChoice ? 'trusted' : 'blocked';
+  updateState((draft) => {
+    const prev = draft.connections.peersById[senderId] || {};
+    draft.connections.peersById[senderId] = {
+      peerId: senderId,
+      displayName: sender.displayName || prev.displayName || '',
+      trustState: nextTrustState,
+      lastSyncAt: new Date().toISOString(),
+      publicKeyJwk: signerPublicKey && typeof signerPublicKey === 'object' ? signerPublicKey : (prev.publicKeyJwk || null),
+    };
+  }, { render: false });
+  return nextTrustState;
+}
+
+async function importMemoryShare(raw, options = {}) {
   const incomingPost = raw && raw.post ? normalizePost(raw.post) : null;
   if (!incomingPost || (!incomingPost.text && incomingPost.media.length === 0)) return false;
+  const sender = raw && raw.sender && typeof raw.sender === 'object' ? raw.sender : null;
+  if (!sender || typeof raw.signature !== 'string' || typeof raw.hash !== 'string' || !raw.signerPublicKey) return false;
+
+  const signatureStatus = await verifyMemoryShareSignature(raw, incomingPost, sender);
+  if (!signatureStatus.valid) {
+    const proceed = await showModalMessage({
+      title: 'Unverified memory share',
+      message: 'Signature check failed for this memory share. Import anyway?',
+      confirmText: 'Import anyway',
+      cancelText: 'Reject',
+      showCancel: true,
+    });
+    if (!proceed) return false;
+  }
+
+  const trustState = await confirmSenderTrust(sender, raw.signerPublicKey, signatureStatus.fingerprint);
+  if (trustState === 'blocked') return false;
 
   const { onConflict = 'generate' } = options;
   if (state.data.postsById[incomingPost.id] && onConflict === 'skip') return false;
   const incomingId = state.data.postsById[incomingPost.id] ? crypto.randomUUID() : incomingPost.id;
-  const postToInsert = { ...incomingPost, id: incomingId };
+  const postToInsert = {
+    ...incomingPost,
+    id: incomingId,
+    importedFrom: {
+      senderId: sender.senderId || '',
+      displayName: sender.displayName || 'Unknown sender',
+      exportedAt: sender.exportedAt || '',
+    },
+  };
   return updateState((draft) => {
     draft.postsById[postToInsert.id] = postToInsert;
     draft.postOrder.unshift(postToInsert.id);
@@ -1716,7 +1933,7 @@ async function handleImportFile(event, mode = 'auto') {
     }
 
     if (isMemoryShare) {
-      const merged = importMemoryShare(parsed);
+      const merged = await importMemoryShare(parsed);
       if (!merged) {
         toast('Memory share import failed: invalid memory payload.', 'error');
       } else {
