@@ -65,6 +65,7 @@ const els = {
   startJoinBtn: document.getElementById('startJoinBtn'),
   inviteCodeInput: document.getElementById('inviteCodeInput'),
   applyCodeBtn: document.getElementById('applyCodeBtn'),
+  directNotesList: document.getElementById('directNotesList'),
   connectStatus: document.getElementById('connectStatus'),
   accountMenuBtn: document.getElementById('accountMenuBtn'),
   accountMenu: document.getElementById('accountMenu'),
@@ -111,6 +112,7 @@ function makeDefaultData() {
       displayName: '',
       signalingEndpoint: '',
       peersById: {},
+      directNotesByPeerId: {},
     },
   };
 }
@@ -422,7 +424,11 @@ function normalizePreferences(preferences = {}) {
 
 function normalizeConnections(connections = {}) {
   const incomingPeers = connections.peersById && typeof connections.peersById === 'object' ? connections.peersById : {};
+  const incomingDirectNotes = connections.directNotesByPeerId && typeof connections.directNotesByPeerId === 'object'
+    ? connections.directNotesByPeerId
+    : {};
   const peersById = {};
+  const directNotesByPeerId = {};
   const identity = connections.identity && typeof connections.identity === 'object' ? connections.identity : {};
 
   Object.keys(incomingPeers).forEach((peerId) => {
@@ -436,12 +442,31 @@ function normalizeConnections(connections = {}) {
     };
   });
 
+  Object.keys(incomingDirectNotes).forEach((peerId) => {
+    const thread = incomingDirectNotes[peerId] && typeof incomingDirectNotes[peerId] === 'object' ? incomingDirectNotes[peerId] : {};
+    const incomingMessages = Array.isArray(thread.messages) ? thread.messages : [];
+    directNotesByPeerId[peerId] = {
+      threadId: typeof thread.threadId === 'string' && thread.threadId ? thread.threadId : `direct-${peerId}`,
+      type: 'direct-notes',
+      peerId,
+      messages: incomingMessages.map((message) => ({
+        id: typeof message.id === 'string' && message.id ? message.id : crypto.randomUUID(),
+        text: typeof message.text === 'string' ? message.text : '',
+        createdAt: typeof message.createdAt === 'string' ? message.createdAt : new Date().toISOString(),
+        authorId: typeof message.authorId === 'string' ? message.authorId : '',
+        authorName: typeof message.authorName === 'string' ? message.authorName : '',
+        authorAvatar: typeof message.authorAvatar === 'string' ? message.authorAvatar : '',
+      })).filter((message) => message.text.trim()),
+    };
+  });
+
   return {
     enabled: Boolean(connections.enabled),
     peerId: typeof connections.peerId === 'string' && connections.peerId ? connections.peerId : crypto.randomUUID(),
     displayName: typeof connections.displayName === 'string' ? connections.displayName : '',
     signalingEndpoint: typeof connections.signalingEndpoint === 'string' ? connections.signalingEndpoint : '',
     peersById,
+    directNotesByPeerId,
     identity: {
       publicKeyJwk: identity.publicKeyJwk && typeof identity.publicKeyJwk === 'object' ? identity.publicKeyJwk : null,
       privateKeyJwk: identity.privateKeyJwk && typeof identity.privateKeyJwk === 'object' ? identity.privateKeyJwk : null,
@@ -456,7 +481,34 @@ function normalizeComment(comment = {}) {
     text: typeof comment.text === 'string' ? comment.text : '',
     createdAt: typeof comment.createdAt === 'string' ? comment.createdAt : new Date().toISOString(),
     updatedAt: typeof comment.updatedAt === 'string' ? comment.updatedAt : undefined,
+    authorId: typeof comment.authorId === 'string' ? comment.authorId : '',
+    authorName: typeof comment.authorName === 'string' ? comment.authorName : '',
+    authorAvatar: typeof comment.authorAvatar === 'string' ? comment.authorAvatar : '',
   };
+}
+
+function normalizeReactions(reactions, liked) {
+  const normalized = {};
+  if (reactions && typeof reactions === 'object' && !Array.isArray(reactions)) {
+    Object.keys(reactions).forEach((actorId) => {
+      const reaction = reactions[actorId] && typeof reactions[actorId] === 'object' ? reactions[actorId] : {};
+      if (!actorId) return;
+      normalized[actorId] = {
+        actorId,
+        authorName: typeof reaction.authorName === 'string' ? reaction.authorName : '',
+        authorAvatar: typeof reaction.authorAvatar === 'string' ? reaction.authorAvatar : '',
+        createdAt: typeof reaction.createdAt === 'string' ? reaction.createdAt : new Date().toISOString(),
+      };
+    });
+  } else if (liked) {
+    normalized.self = {
+      actorId: 'self',
+      authorName: 'You',
+      authorAvatar: '',
+      createdAt: new Date().toISOString(),
+    };
+  }
+  return normalized;
 }
 
 function normalizePost(post = {}) {
@@ -494,7 +546,7 @@ function normalizePost(post = {}) {
     tags: Array.isArray(post.tags) ? post.tags.filter((tag) => typeof tag === 'string').map((tag) => tag.trim()).filter(Boolean) : [],
     peopleIds: Array.isArray(post.peopleIds) ? post.peopleIds.filter((id) => typeof id === 'string') : [],
     media: normalizedMedia,
-    liked: Boolean(post.liked),
+    reactions: normalizeReactions(post.reactions, post.liked),
     comments: Array.isArray(post.comments) ? post.comments.map(normalizeComment).filter((c) => c.text.trim()) : [],
     importedFrom: importedFrom
       ? {
@@ -597,6 +649,7 @@ async function load() {
   els.connectEnabled.checked = Boolean(state.data.connections.enabled);
   els.connectDisplayName.value = state.data.connections.displayName || state.data.profile.name || '';
   els.signalingEndpoint.value = state.data.connections.signalingEndpoint || '';
+  renderDirectNotesList();
   renderConnectionStatus(state.data.connections.enabled ? 'Connection feature is enabled.' : 'Connection disabled.');
 }
 
@@ -633,6 +686,21 @@ function initials(name) {
     .slice(0, 2)
     .map((chunk) => chunk[0].toUpperCase())
     .join('') || 'M';
+}
+
+function getLocalActorMeta() {
+  return {
+    actorId: state.data.connections.peerId || 'self',
+    authorName: state.data.connections.displayName || state.data.profile.name || 'Mybook User',
+    authorAvatar: state.data.profile.avatarDataUrl || '',
+  };
+}
+
+function resolveActorName(actorId, fallbackName = '') {
+  if (!actorId || actorId === 'self') return state.data.connections.displayName || state.data.profile.name || 'Mybook User';
+  if (actorId === state.data.connections.peerId) return state.data.connections.displayName || state.data.profile.name || 'Mybook User';
+  const peer = state.data.connections.peersById[actorId];
+  return fallbackName || peer?.displayName || actorId;
 }
 
 function renderAvatar() {
@@ -949,11 +1017,28 @@ function renderPosts() {
     });
 
     const likeBtn = node.querySelector('.like-btn');
-    likeBtn.classList.toggle('active', !!post.liked);
-    likeBtn.textContent = post.liked ? '👍 Liked' : '👍 Like';
+    const actor = getLocalActorMeta();
+    const reactions = post.reactions && typeof post.reactions === 'object' ? post.reactions : {};
+    const reactedByMe = Boolean(reactions[actor.actorId] || reactions.self);
+    likeBtn.classList.toggle('active', reactedByMe);
+    const reactionActors = Object.values(reactions).map((reaction) => resolveActorName(reaction.actorId, reaction.authorName)).filter(Boolean);
+    likeBtn.textContent = reactionActors.length ? `👍 ${reactionActors.join(', ')}` : '👍 Like';
     likeBtn.addEventListener('click', () => {
       updateState((draft) => {
-        draft.postsById[post.id].liked = !draft.postsById[post.id].liked;
+        const draftPost = draft.postsById[post.id];
+        const draftReactions = draftPost.reactions && typeof draftPost.reactions === 'object' ? draftPost.reactions : {};
+        if (draftReactions[actor.actorId] || draftReactions.self) {
+          delete draftReactions[actor.actorId];
+          delete draftReactions.self;
+        } else {
+          draftReactions[actor.actorId] = {
+            actorId: actor.actorId,
+            authorName: actor.authorName,
+            authorAvatar: actor.authorAvatar,
+            createdAt: new Date().toISOString(),
+          };
+        }
+        draftPost.reactions = draftReactions;
       });
     });
 
@@ -1053,7 +1138,7 @@ function renderPosts() {
       item.classList.remove('comment-template', 'hidden');
 
       const author = item.querySelector('.comment-author');
-      author.textContent = state.data.profile.name;
+      author.textContent = `${resolveActorName(comment.authorId, comment.authorName)} • ${formatDate(comment.createdAt)}`;
 
       const text = item.querySelector('.comment-text');
       text.textContent = comment.text;
@@ -1118,6 +1203,9 @@ function renderPosts() {
         id: crypto.randomUUID(),
         text,
         createdAt: new Date().toISOString(),
+        authorId: actor.actorId,
+        authorName: actor.authorName,
+        authorAvatar: actor.authorAvatar,
       };
 
       updateState((draft) => {
@@ -1233,7 +1321,7 @@ els.postForm.addEventListener('submit', async (event) => {
     tags: els.postTags.value.split(',').map((tag) => tag.trim()).filter(Boolean),
     peopleIds: state.selectedPostPeople,
     media: mediaRefs,
-    liked: false,
+    reactions: {},
     comments: [],
   });
 
@@ -1498,6 +1586,86 @@ function renderConnectionStatus(message, isError = false) {
   els.connectStatus.classList.toggle('is-error', isError);
 }
 
+function getDirectThread(peerId) {
+  const existing = state.data.connections.directNotesByPeerId?.[peerId];
+  if (existing) return existing;
+  return {
+    threadId: `direct-${peerId}`,
+    type: 'direct-notes',
+    peerId,
+    messages: [],
+  };
+}
+
+function renderDirectNotesList() {
+  if (!els.directNotesList) return;
+  els.directNotesList.innerHTML = '';
+  const peers = Object.values(state.data.connections.peersById || {});
+  if (!peers.length) {
+    els.directNotesList.innerHTML = '<p class="direct-notes-empty">Pair with someone to start direct notes.</p>';
+    return;
+  }
+
+  peers.forEach((peer) => {
+    const row = document.createElement('div');
+    row.className = 'direct-note-row';
+    const thread = getDirectThread(peer.peerId);
+    const latest = thread.messages[thread.messages.length - 1];
+    const summary = latest ? `${resolveActorName(latest.authorId, latest.authorName)}: ${latest.text}` : 'No notes yet';
+    row.innerHTML = `<div><strong>${peer.displayName || peer.peerId}</strong><div class="direct-note-summary">${summary}</div></div>`;
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'ghost';
+    btn.textContent = 'Open';
+    btn.addEventListener('click', () => {
+      void openDirectNotesThread(peer.peerId);
+    });
+    row.append(btn);
+    els.directNotesList.append(row);
+  });
+}
+
+async function openDirectNotesThread(peerId) {
+  const thread = getDirectThread(peerId);
+  const history = thread.messages.slice(-8).map((msg) => (
+    `${resolveActorName(msg.authorId, msg.authorName)}: ${msg.text}`
+  ));
+  const peerName = state.data.connections.peersById[peerId]?.displayName || peerId;
+  const note = await showModalMessage({
+    title: `Direct notes: ${peerName}`,
+    message: `${history.length ? history.join('\n') : 'No notes yet.'}\n\nAdd a new note:`,
+    confirmText: 'Save note',
+    cancelText: 'Close',
+    showCancel: true,
+    input: { placeholder: 'Type a note…', defaultValue: '' },
+  });
+  if (!note) return;
+
+  const actor = getLocalActorMeta();
+  const message = {
+    id: crypto.randomUUID(),
+    text: note,
+    createdAt: new Date().toISOString(),
+    authorId: actor.actorId,
+    authorName: actor.authorName,
+    authorAvatar: actor.authorAvatar,
+  };
+  updateState((draft) => {
+    const existing = draft.connections.directNotesByPeerId?.[peerId] || {
+      threadId: `direct-${peerId}`,
+      type: 'direct-notes',
+      peerId,
+      messages: [],
+    };
+    existing.messages = [...(existing.messages || []), message];
+    if (!draft.connections.directNotesByPeerId) draft.connections.directNotesByPeerId = {};
+    draft.connections.directNotesByPeerId[peerId] = existing;
+  }, { render: false });
+  renderDirectNotesList();
+  sendProtocolMessage('direct-note', { toPeerId: peerId, threadType: 'direct-notes', message });
+  toast('Direct note saved.');
+}
+
 function trackPeerConnection(peerId, displayName, trustState = 'trusted') {
   updateState((draft) => {
     const existing = draft.connections.peersById[peerId] || {};
@@ -1509,6 +1677,7 @@ function trackPeerConnection(peerId, displayName, trustState = 'trusted') {
       publicKeyJwk: existing.publicKeyJwk || null,
     };
   }, { render: false });
+  renderDirectNotesList();
 }
 
 async function applyIncomingMemoryShare(message) {
@@ -1564,6 +1733,40 @@ async function handleProtocolMessage(raw) {
     const importedCount = await applyIncomingMemoryShare(msg);
     sendProtocolMessage('ack', { receivedType: 'memory-share', importedCount });
     renderConnectionStatus(importedCount ? `Synced ${importedCount} memories.` : 'Connected. Nothing new to import.');
+    return;
+  }
+
+  if (msg.type === 'direct-note') {
+    const incoming = msg.payload?.message;
+    if (incoming && typeof incoming.text === 'string' && incoming.text.trim()) {
+      const peerId = msg.fromPeerId || msg.payload?.fromPeerId || '';
+      if (peerId) {
+        updateState((draft) => {
+          if (!draft.connections.directNotesByPeerId) draft.connections.directNotesByPeerId = {};
+          const existing = draft.connections.directNotesByPeerId[peerId] || {
+            threadId: `direct-${peerId}`,
+            type: 'direct-notes',
+            peerId,
+            messages: [],
+          };
+          existing.messages = [
+            ...(existing.messages || []),
+            {
+              id: typeof incoming.id === 'string' && incoming.id ? incoming.id : crypto.randomUUID(),
+              text: incoming.text,
+              createdAt: typeof incoming.createdAt === 'string' ? incoming.createdAt : new Date().toISOString(),
+              authorId: incoming.authorId || peerId,
+              authorName: incoming.authorName || msg.fromDisplayName || '',
+              authorAvatar: incoming.authorAvatar || '',
+            },
+          ];
+          draft.connections.directNotesByPeerId[peerId] = existing;
+        }, { render: false });
+        renderDirectNotesList();
+        renderConnectionStatus(`New direct note from ${msg.fromDisplayName || peerId}.`);
+      }
+    }
+    sendProtocolMessage('ack', { receivedType: 'direct-note' });
     return;
   }
 
@@ -1768,7 +1971,18 @@ function postContentHash(post = {}) {
       text: comment.text || '',
       createdAt: comment.createdAt || '',
       updatedAt: comment.updatedAt || '',
+      authorId: comment.authorId || '',
+      authorName: comment.authorName || '',
+      authorAvatar: comment.authorAvatar || '',
     })) : [],
+    reactions: post.reactions && typeof post.reactions === 'object'
+      ? Object.keys(post.reactions).sort().map((actorId) => ({
+        actorId,
+        authorName: post.reactions[actorId]?.authorName || '',
+        authorAvatar: post.reactions[actorId]?.authorAvatar || '',
+        createdAt: post.reactions[actorId]?.createdAt || '',
+      }))
+      : [],
   });
 }
 
@@ -1895,6 +2109,7 @@ function applyImportedData(imported) {
   els.signalingEndpoint.value = state.data.connections.signalingEndpoint || '';
   applyTheme(state.data.preferences.theme);
   renderPeopleList();
+  renderDirectNotesList();
   renderPostPeopleMenu();
   renderFilterPeopleList();
 }
@@ -2342,6 +2557,7 @@ async function init() {
   await migrateLegacyMediaToIndexedDb();
   renderAvatar();
   renderPeopleList();
+  renderDirectNotesList();
   renderPostPeopleMenu();
   renderPosts();
 }

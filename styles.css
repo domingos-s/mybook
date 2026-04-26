@@ -560,3 +560,26 @@ textarea:focus-visible, input:focus-visible, select:focus-visible {
 .connect-status.is-error {
   color: var(--danger);
 }
+
+.direct-notes-list {
+  display: grid;
+  gap: 8px;
+}
+
+.direct-notes-empty,
+.direct-note-summary {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-2);
+}
+
+.direct-note-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px;
+  background: var(--surface);
+}
