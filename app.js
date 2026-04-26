@@ -13,12 +13,29 @@ const els = {
   postText: document.getElementById('postText'),
   postDate: document.getElementById('postDate'),
   postTags: document.getElementById('postTags'),
+  postPeopleBtn: document.getElementById('postPeopleBtn'),
+  postPeopleMenu: document.getElementById('postPeopleMenu'),
   postMedia: document.getElementById('postMedia'),
   mediaPreview: document.getElementById('mediaPreview'),
   searchInput: document.getElementById('searchInput'),
   sortSelect: document.getElementById('sortSelect'),
+  openFilterBtn: document.getElementById('openFilterBtn'),
   feedList: document.getElementById('feedList'),
   emptyState: document.getElementById('emptyState'),
+  addPersonBtn: document.getElementById('addPersonBtn'),
+  peopleList: document.getElementById('peopleList'),
+  personModal: document.getElementById('personModal'),
+  personModalCloseBtn: document.getElementById('personModalCloseBtn'),
+  personNameInput: document.getElementById('personNameInput'),
+  personRelationshipInput: document.getElementById('personRelationshipInput'),
+  personPicInput: document.getElementById('personPicInput'),
+  savePersonBtn: document.getElementById('savePersonBtn'),
+  filterModal: document.getElementById('filterModal'),
+  filterModalCloseBtn: document.getElementById('filterModalCloseBtn'),
+  tagFilterInput: document.getElementById('tagFilterInput'),
+  personFilterList: document.getElementById('personFilterList'),
+  applyFilterBtn: document.getElementById('applyFilterBtn'),
+  clearFilterBtn: document.getElementById('clearFilterBtn'),
   postTemplate: document.getElementById('postTemplate'),
   settingsBtn: document.getElementById('settingsBtn'),
   settingsModal: document.getElementById('settingsModal'),
@@ -42,12 +59,16 @@ const els = {
 const state = {
   data: makeDefaultData(),
   pendingMedia: [],
+  selectedPostPeople: [],
+  activeFilters: { tags: [], peopleIds: [] },
+  pendingPersonAvatarDataUrl: '',
 };
 
 function makeDefaultData() {
   return {
     version: 3,
     profile: { name: '', bio: '', avatarDataUrl: '' },
+    people: [],
     postsById: {},
     postOrder: [],
     preferences: {
@@ -229,6 +250,7 @@ function normalizePost(post = {}) {
     createdAt: typeof post.createdAt === 'string' ? post.createdAt : new Date().toISOString(),
     updatedAt: typeof post.updatedAt === 'string' ? post.updatedAt : undefined,
     tags: Array.isArray(post.tags) ? post.tags.filter((tag) => typeof tag === 'string').map((tag) => tag.trim()).filter(Boolean) : [],
+    peopleIds: Array.isArray(post.peopleIds) ? post.peopleIds.filter((id) => typeof id === 'string') : [],
     media: Array.isArray(post.media)
       ? post.media.filter((m) => m && typeof m.dataUrl === 'string' && (m.type === 'image' || m.type === 'video')).map((m) => ({
         dataUrl: m.dataUrl,
@@ -244,6 +266,12 @@ function normalizePost(post = {}) {
 function normalizeV3(raw = {}) {
   const normalized = makeDefaultData();
   normalized.profile = normalizeProfile(raw.profile || {});
+  normalized.people = Array.isArray(raw.people) ? raw.people.map((person) => ({
+    id: typeof person.id === 'string' ? person.id : crypto.randomUUID(),
+    name: typeof person.name === 'string' ? person.name : '',
+    relationship: typeof person.relationship === 'string' ? person.relationship : '',
+    avatarDataUrl: typeof person.avatarDataUrl === 'string' ? person.avatarDataUrl : '',
+  })).filter((person) => person.name.trim()) : [];
   normalized.preferences = normalizePreferences(raw.preferences || {});
 
   const incomingPostsById = raw.postsById && typeof raw.postsById === 'object' ? raw.postsById : {};
@@ -423,13 +451,80 @@ function getVisiblePosts() {
     .filter(Boolean)
     .filter((post) => {
       const hay = `${post.text}\n${(post.tags || []).join(' ')}`.toLowerCase();
-      return hay.includes(q);
+      const searchMatch = hay.includes(q);
+      const tagFilterMatch = state.activeFilters.tags.length === 0
+        || state.activeFilters.tags.some((tag) => (post.tags || []).map((t) => t.toLowerCase()).includes(tag));
+      const peopleMatch = state.activeFilters.peopleIds.length === 0
+        || state.activeFilters.peopleIds.some((id) => (post.peopleIds || []).includes(id));
+      return searchMatch && tagFilterMatch && peopleMatch;
     });
 
   return posts.sort((a, b) => {
     const lhs = new Date(a.date || a.createdAt).getTime();
     const rhs = new Date(b.date || b.createdAt).getTime();
     return order === 'oldest' ? lhs - rhs : rhs - lhs;
+  });
+}
+
+function renderPeopleList() {
+  els.peopleList.innerHTML = '';
+  if (!state.data.people.length) {
+    els.peopleList.innerHTML = '<p class="people-empty">No people yet.</p>';
+    return;
+  }
+
+  state.data.people.forEach((person) => {
+    const row = document.createElement('div');
+    row.className = 'person-row';
+    const avatar = document.createElement('div');
+    avatar.className = 'person-avatar';
+    if (person.avatarDataUrl) avatar.style.backgroundImage = `url("${person.avatarDataUrl}")`;
+    else avatar.textContent = initials(person.name);
+    const text = document.createElement('div');
+    text.innerHTML = `<strong>${person.name}</strong><span>${person.relationship}</span>`;
+    row.append(avatar, text);
+    els.peopleList.append(row);
+  });
+}
+
+function renderPostPeopleMenu() {
+  els.postPeopleMenu.innerHTML = '';
+  if (!state.data.people.length) {
+    els.postPeopleMenu.innerHTML = '<div class="people-empty">Add people in your profile first.</div>';
+    return;
+  }
+  state.data.people.forEach((person) => {
+    const label = document.createElement('label');
+    label.className = 'people-check';
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.checked = state.selectedPostPeople.includes(person.id);
+    checkbox.addEventListener('change', () => {
+      if (checkbox.checked) state.selectedPostPeople.push(person.id);
+      else state.selectedPostPeople = state.selectedPostPeople.filter((id) => id !== person.id);
+      state.selectedPostPeople = [...new Set(state.selectedPostPeople)];
+      els.postPeopleBtn.textContent = state.selectedPostPeople.length ? `Tagged (${state.selectedPostPeople.length})` : 'Tag people';
+    });
+    label.append(checkbox, document.createTextNode(`${person.name} (${person.relationship})`));
+    els.postPeopleMenu.append(label);
+  });
+}
+
+function renderFilterPeopleList() {
+  els.personFilterList.innerHTML = '';
+  state.data.people.forEach((person) => {
+    const label = document.createElement('label');
+    label.className = 'people-check';
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.checked = state.activeFilters.peopleIds.includes(person.id);
+    checkbox.addEventListener('change', () => {
+      if (checkbox.checked) state.activeFilters.peopleIds.push(person.id);
+      else state.activeFilters.peopleIds = state.activeFilters.peopleIds.filter((id) => id !== person.id);
+      state.activeFilters.peopleIds = [...new Set(state.activeFilters.peopleIds)];
+    });
+    label.append(checkbox, document.createTextNode(`${person.name} (${person.relationship})`));
+    els.personFilterList.append(label);
   });
 }
 
@@ -493,6 +588,14 @@ function renderPosts() {
       const span = document.createElement('span');
       span.className = 'tag';
       span.textContent = `#${tag}`;
+      tagList.append(span);
+    });
+    (post.peopleIds || []).forEach((personId) => {
+      const person = state.data.people.find((p) => p.id === personId);
+      if (!person) return;
+      const span = document.createElement('span');
+      span.className = 'tag';
+      span.textContent = `@${person.name}`;
       tagList.append(span);
     });
 
@@ -742,6 +845,7 @@ els.postForm.addEventListener('submit', (event) => {
     date: els.postDate.value,
     createdAt: new Date().toISOString(),
     tags: els.postTags.value.split(',').map((tag) => tag.trim()).filter(Boolean),
+    peopleIds: state.selectedPostPeople,
     media: state.pendingMedia,
     liked: false,
     comments: [],
@@ -762,11 +866,86 @@ els.postForm.addEventListener('submit', (event) => {
   els.postDate.value = '';
   els.postMedia.value = '';
   state.pendingMedia = [];
+  state.selectedPostPeople = [];
+  els.postPeopleBtn.textContent = 'Tag people';
+  els.postPeopleMenu.classList.add('hidden');
   renderMediaPreview();
 });
 
 els.searchInput.addEventListener('input', renderPosts);
 els.sortSelect.addEventListener('change', renderPosts);
+els.postPeopleBtn.addEventListener('click', () => {
+  const isHidden = els.postPeopleMenu.classList.contains('hidden');
+  renderPostPeopleMenu();
+  els.postPeopleMenu.classList.toggle('hidden', !isHidden);
+  els.postPeopleBtn.setAttribute('aria-expanded', String(isHidden));
+});
+
+els.addPersonBtn.addEventListener('click', () => {
+  state.pendingPersonAvatarDataUrl = '';
+  els.personNameInput.value = '';
+  els.personRelationshipInput.value = '';
+  els.personPicInput.value = '';
+  openModalOverlay(els.personModal);
+});
+
+els.personModalCloseBtn.addEventListener('click', () => closeModalOverlay(els.personModal));
+els.personModal.addEventListener('click', (event) => {
+  if (event.target === els.personModal) closeModalOverlay(els.personModal);
+});
+
+els.personPicInput.addEventListener('change', async (event) => {
+  const file = event.target.files?.[0];
+  if (!file) return;
+  try {
+    const avatar = await fileToDataUrl(file);
+    state.pendingPersonAvatarDataUrl = avatar.dataUrl;
+  } catch {
+    toast('Could not process that person photo.', 'error');
+  }
+});
+
+els.savePersonBtn.addEventListener('click', () => {
+  const name = els.personNameInput.value.trim();
+  const relationship = els.personRelationshipInput.value.trim();
+  if (!name || !relationship) {
+    toast('Add both name and relationship.', 'warn');
+    return;
+  }
+  updateState((draft) => {
+    draft.people.push({
+      id: crypto.randomUUID(),
+      name,
+      relationship,
+      avatarDataUrl: state.pendingPersonAvatarDataUrl,
+    });
+  }, { render: false });
+  renderPeopleList();
+  renderPostPeopleMenu();
+  renderFilterPeopleList();
+  closeModalOverlay(els.personModal);
+});
+
+els.openFilterBtn.addEventListener('click', () => {
+  els.tagFilterInput.value = state.activeFilters.tags.join(', ');
+  renderFilterPeopleList();
+  openModalOverlay(els.filterModal);
+});
+els.filterModalCloseBtn.addEventListener('click', () => closeModalOverlay(els.filterModal));
+els.filterModal.addEventListener('click', (event) => {
+  if (event.target === els.filterModal) closeModalOverlay(els.filterModal);
+});
+els.applyFilterBtn.addEventListener('click', () => {
+  state.activeFilters.tags = els.tagFilterInput.value.split(',').map((t) => t.trim().toLowerCase()).filter(Boolean);
+  closeModalOverlay(els.filterModal);
+  renderPosts();
+});
+els.clearFilterBtn.addEventListener('click', () => {
+  state.activeFilters = { tags: [], peopleIds: [] };
+  els.tagFilterInput.value = '';
+  renderFilterPeopleList();
+  renderPosts();
+});
 
 els.accountMenuBtn.addEventListener('click', () => {
   const isOpen = !els.accountMenu.classList.contains('hidden');
@@ -780,6 +959,10 @@ document.addEventListener('click', (event) => {
   }
   if (!event.target.closest('.post-menu-wrap')) {
     document.querySelectorAll('.post-menu').forEach((menu) => menu.classList.add('hidden'));
+  }
+  if (!event.target.closest('.people-dropdown-wrap')) {
+    els.postPeopleMenu.classList.add('hidden');
+    els.postPeopleBtn.setAttribute('aria-expanded', 'false');
   }
 });
 
@@ -1012,6 +1195,9 @@ els.importFile.addEventListener('change', async (event) => {
     els.profileBio.value = state.data.profile.bio;
     els.themeSelect.value = state.data.preferences.theme;
     applyTheme(state.data.preferences.theme);
+    renderPeopleList();
+    renderPostPeopleMenu();
+    renderFilterPeopleList();
     toast('Backup imported.');
   } catch {
     toast('Import failed: invalid JSON file.', 'error');
@@ -1028,6 +1214,8 @@ if ('serviceWorker' in navigator) {
 async function init() {
   await load();
   renderAvatar();
+  renderPeopleList();
+  renderPostPeopleMenu();
   renderPosts();
 }
 
