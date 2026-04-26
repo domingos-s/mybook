@@ -3,10 +3,12 @@
 A private, on-device social memory feed with a Facebook-like aesthetic.
 
 ## Features
-- Create dated memory posts
-- Add tags
+- First-use onboarding prompt for your name (persisted locally)
+- Editable profile name, bio, and uploadable profile picture
+- Create dated memory posts with tags
+- Upload photo and video attachments with posts
 - Search and sort posts
-- Edit profile name and bio
+- Like/unlike memories
 - Data stored locally in `localStorage`
 - Export/import JSON backup
 - Offline support through a service worker
