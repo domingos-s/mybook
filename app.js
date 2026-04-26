@@ -460,7 +460,18 @@ function renderPosts() {
 
   filtered.forEach((post) => {
     const node = els.postTemplate.content.firstElementChild.cloneNode(true);
-    node.querySelector('.mini-avatar').textContent = initials(state.data.profile.name);
+    const miniAvatar = node.querySelector('.mini-avatar');
+    if (state.data.profile.avatarDataUrl) {
+      miniAvatar.textContent = '';
+      miniAvatar.style.backgroundImage = `url("${state.data.profile.avatarDataUrl}")`;
+      miniAvatar.style.backgroundSize = 'cover';
+      miniAvatar.style.backgroundPosition = 'center';
+    } else {
+      miniAvatar.style.backgroundImage = '';
+      miniAvatar.style.backgroundSize = '';
+      miniAvatar.style.backgroundPosition = '';
+      miniAvatar.textContent = initials(state.data.profile.name);
+    }
     node.querySelector('.post-author').textContent = state.data.profile.name;
     node.querySelector('.post-date').textContent = formatDate(post.date || post.createdAt);
     node.querySelector('.post-text').textContent = post.text;
