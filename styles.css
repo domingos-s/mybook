@@ -178,6 +178,7 @@ textarea:focus-visible, input:focus-visible, select:focus-visible {
 .people-empty { color: var(--text-2); font-size: 13px; margin: 2px 0; }
 
 .feed { display: flex; flex-direction: column; gap: var(--space-3); }
+.compose-launch { align-self: flex-start; }
 .composer { padding: var(--space-3); }
 .composer textarea, .filters input, .filters select, .composer input {
   border: 1px solid var(--border);
@@ -373,6 +374,17 @@ textarea:focus-visible, input:focus-visible, select:focus-visible {
 }
 #settingsClearBtn { width: 100%; margin-top: var(--space-3); }
 .person-filter-list { display: grid; gap: 6px; margin-bottom: var(--space-3); max-height: 200px; overflow: auto; }
+.compose-panel {
+  width: min(760px, 100%);
+  max-height: min(88vh, 920px);
+  overflow: auto;
+}
+.compose-form {
+  margin-top: 12px;
+}
+.compose-people-panel {
+  margin: 0;
+}
 
 .message-modal {
   position: fixed;
