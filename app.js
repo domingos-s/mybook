@@ -16,7 +16,12 @@ const els = {
   feedList: document.getElementById('feedList'),
   emptyState: document.getElementById('emptyState'),
   postTemplate: document.getElementById('postTemplate'),
-  clearBtn: document.getElementById('clearBtn'),
+  settingsBtn: document.getElementById('settingsBtn'),
+  settingsModal: document.getElementById('settingsModal'),
+  settingsPanel: document.querySelector('#settingsModal .settings-panel'),
+  settingsCloseBtn: document.getElementById('settingsCloseBtn'),
+  themeSelect: document.getElementById('themeSelect'),
+  clearDataBtn: document.getElementById('clearDataBtn'),
   updateAppBtn: document.getElementById('updateAppBtn'),
   exportBtn: document.getElementById('exportBtn'),
   importFile: document.getElementById('importFile'),
@@ -26,7 +31,20 @@ const state = {
   profile: { name: '', bio: '', avatarDataUrl: '' },
   posts: [],
   pendingMedia: [],
+  preferences: {
+    theme: 'system',
+  },
 };
+
+function resolveTheme(mode) {
+  if (mode === 'dark' || mode === 'light') return mode;
+  return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+}
+
+function applyTheme(themeMode) {
+  const resolvedMode = resolveTheme(themeMode);
+  document.documentElement.setAttribute('data-theme', resolvedMode);
+}
 
 async function clearAppCaches() {
   if (!('caches' in window)) return;
@@ -45,6 +63,7 @@ function load() {
       const parsed = JSON.parse(saved);
       state.profile = normalizeProfile(parsed.profile || {});
       state.posts = Array.isArray(parsed.posts) ? parsed.posts : [];
+      state.preferences = normalizePreferences(parsed.preferences || {});
     } catch {
       // ignore malformed local data
     }
@@ -58,6 +77,8 @@ function load() {
 
   els.profileName.value = state.profile.name;
   els.profileBio.value = state.profile.bio || '';
+  els.themeSelect.value = state.preferences.theme;
+  applyTheme(state.preferences.theme);
   renderAvatar();
 }
 
@@ -71,6 +92,17 @@ function normalizeProfile(profile = {}) {
     ...state.profile,
     ...profile,
     avatarDataUrl,
+  };
+}
+
+function normalizePreferences(preferences = {}) {
+  const theme = typeof preferences.theme === 'string' ? preferences.theme : 'system';
+  const normalizedTheme = ['light', 'dark', 'system'].includes(theme) ? theme : 'system';
+
+  return {
+    ...state.preferences,
+    ...preferences,
+    theme: normalizedTheme,
   };
 }
 
@@ -302,6 +334,20 @@ function renderPosts() {
   });
 }
 
+function openSettings() {
+  els.settingsModal.classList.remove('hidden');
+  requestAnimationFrame(() => els.settingsModal.classList.add('is-open'));
+}
+
+function closeSettings() {
+  els.settingsModal.classList.remove('is-open');
+  window.setTimeout(() => {
+    if (!els.settingsModal.classList.contains('is-open')) {
+      els.settingsModal.classList.add('hidden');
+    }
+  }, 180);
+}
+
 els.profileName.addEventListener('input', () => {
   state.profile.name = els.profileName.value.trim() || 'Mybook User';
   renderAvatar();
@@ -358,12 +404,36 @@ els.postForm.addEventListener('submit', (event) => {
 els.searchInput.addEventListener('input', renderPosts);
 els.sortSelect.addEventListener('change', renderPosts);
 
-els.clearBtn.addEventListener('click', () => {
+els.settingsBtn.addEventListener('click', openSettings);
+els.settingsCloseBtn.addEventListener('click', closeSettings);
+els.settingsModal.addEventListener('click', (event) => {
+  if (event.target === els.settingsModal) {
+    closeSettings();
+  }
+});
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && !els.settingsModal.classList.contains('hidden')) {
+    closeSettings();
+  }
+});
+
+els.themeSelect.addEventListener('change', () => {
+  state.preferences.theme = els.themeSelect.value;
+  applyTheme(state.preferences.theme);
+  save();
+});
+
+window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
+  if (state.preferences.theme === 'system') {
+    applyTheme('system');
+  }
+});
+
+els.clearDataBtn.addEventListener('click', () => {
   if (!confirm('Delete all profile data and memories on this device?')) return;
   localStorage.removeItem(STORAGE_KEY);
   location.reload();
 });
-
 
 els.updateAppBtn.addEventListener('click', async () => {
   const proceed = confirm('Download the latest app files now? Your saved memories will stay on this device.');
@@ -408,6 +478,7 @@ els.importFile.addEventListener('change', async (event) => {
   if (!imported || typeof imported !== 'object') return;
   state.profile = normalizeProfile(imported.profile || {});
   state.posts = Array.isArray(imported.posts) ? imported.posts : [];
+  state.preferences = normalizePreferences(imported.preferences || {});
   save();
   load();
   renderPosts();
