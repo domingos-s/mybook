@@ -147,7 +147,17 @@
     </article>
   </template>
 
-  <div id="toastStack" class="toast-stack" aria-live="polite" aria-atomic="true"></div>
+  <div id="messageModal" class="message-modal hidden" role="dialog" aria-modal="true" aria-labelledby="messageModalTitle">
+    <div class="message-panel" role="document">
+      <h2 id="messageModalTitle" class="message-title"></h2>
+      <p id="messageModalText" class="message-text"></p>
+      <input id="messageModalInput" class="message-input hidden" type="text" maxlength="40" />
+      <div class="message-actions">
+        <button id="messageModalCancel" class="ghost hidden" type="button">Cancel</button>
+        <button id="messageModalConfirm" class="primary" type="button">OK</button>
+      </div>
+    </div>
+  </div>
 
   <script src="app.js"></script>
 </body>
