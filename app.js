@@ -27,21 +27,8 @@ const state = {
   pendingMedia: [],
 };
 
-function makeId() {
-  if (globalThis.crypto && typeof globalThis.crypto.randomUUID === 'function') {
-    return globalThis.crypto.randomUUID();
-  }
-
-  return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-}
-
 function save() {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-    return true;
-  } catch {
-    return false;
-  }
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
 }
 
 function load() {
@@ -91,49 +78,10 @@ function formatDate(dateStr) {
   return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', year: 'numeric' }).format(d);
 }
 
-function compressImage(file, maxSize = 1280, quality = 0.75) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const img = new Image();
-      img.onload = () => {
-        const ratio = Math.min(1, maxSize / Math.max(img.width, img.height));
-        const canvas = document.createElement('canvas');
-        canvas.width = Math.round(img.width * ratio);
-        canvas.height = Math.round(img.height * ratio);
-        const ctx = canvas.getContext('2d');
-        if (!ctx) {
-          reject(new Error('Unable to process image.'));
-          return;
-        }
-        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-        resolve(canvas.toDataURL('image/jpeg', quality));
-      };
-      img.onerror = reject;
-      img.src = reader.result;
-    };
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
-  });
-}
-
 function fileToDataUrl(file) {
   return new Promise((resolve, reject) => {
-    const isVideo = file.type.startsWith('video/');
-    if (isVideo && file.size > 2 * 1024 * 1024) {
-      reject(new Error('Videos larger than 2MB cannot be saved offline in this app.'));
-      return;
-    }
-
-    if (file.type.startsWith('image/')) {
-      compressImage(file)
-        .then((dataUrl) => resolve({ dataUrl, type: 'image', name: file.name }))
-        .catch(reject);
-      return;
-    }
-
     const reader = new FileReader();
-    reader.onload = () => resolve({ dataUrl: reader.result, type: isVideo ? 'video' : 'image', name: file.name });
+    reader.onload = () => resolve({ dataUrl: reader.result, type: file.type.startsWith('video/') ? 'video' : 'image', name: file.name });
     reader.onerror = reject;
     reader.readAsDataURL(file);
   });
@@ -232,15 +180,8 @@ els.profilePicInput.addEventListener('change', async (event) => {
 
 els.postMedia.addEventListener('change', async (event) => {
   const files = Array.from(event.target.files || []).slice(0, 8);
-  try {
-    state.pendingMedia = await Promise.all(files.map(fileToDataUrl));
-    renderMediaPreview();
-  } catch (error) {
-    state.pendingMedia = [];
-    els.postMedia.value = '';
-    renderMediaPreview();
-    alert(error.message || 'Could not process selected media.');
-  }
+  state.pendingMedia = await Promise.all(files.map(fileToDataUrl));
+  renderMediaPreview();
 });
 
 els.postForm.addEventListener('submit', (event) => {
@@ -249,7 +190,7 @@ els.postForm.addEventListener('submit', (event) => {
   if (!text && state.pendingMedia.length === 0) return;
 
   state.posts.push({
-    id: makeId(),
+    id: crypto.randomUUID(),
     text,
     date: els.postDate.value,
     createdAt: new Date().toISOString(),
@@ -264,12 +205,7 @@ els.postForm.addEventListener('submit', (event) => {
   els.postMedia.value = '';
   state.pendingMedia = [];
   renderMediaPreview();
-  const saved = save();
-  if (!saved) {
-    state.posts.pop();
-    alert('Post could not be saved. Try a smaller image or fewer media files.');
-    return;
-  }
+  save();
   renderPosts();
 });
 
@@ -306,9 +242,7 @@ els.importFile.addEventListener('change', async (event) => {
 });
 
 if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' })
-    .then((registration) => registration.update())
-    .catch(() => {});
+  navigator.serviceWorker.register('sw.js').catch(() => {});
 }
 
 load();
