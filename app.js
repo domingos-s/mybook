@@ -21,7 +21,7 @@ const els = {
   settingsPanel: document.querySelector('#settingsModal .settings-panel'),
   settingsCloseBtn: document.getElementById('settingsCloseBtn'),
   themeSelect: document.getElementById('themeSelect'),
-  clearDataBtn: document.getElementById('clearDataBtn'),
+  settingsClearBtn: document.getElementById('settingsClearBtn'),
   updateAppBtn: document.getElementById('updateAppBtn'),
   exportBtn: document.getElementById('exportBtn'),
   importFile: document.getElementById('importFile'),
@@ -429,7 +429,7 @@ window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () 
   }
 });
 
-els.clearDataBtn.addEventListener('click', () => {
+els.settingsClearBtn.addEventListener('click', () => {
   if (!confirm('Delete all profile data and memories on this device?')) return;
   localStorage.removeItem(STORAGE_KEY);
   location.reload();
