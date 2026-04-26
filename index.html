@@ -37,7 +37,13 @@
       <input id="profilePicInput" type="file" accept="image/*" hidden />
       <input id="profileName" class="profile-name" maxlength="40" />
       <textarea id="profileBio" class="profile-bio" maxlength="140" placeholder="Add a short bio..."></textarea>
-      <div class="privacy-note">Private. Offline-first. Stored only on this device.</div>
+      <div class="people-panel">
+        <div class="people-panel-head">
+          <h3>People</h3>
+          <button id="addPersonBtn" class="ghost" type="button">+ Add person</button>
+        </div>
+        <div id="peopleList" class="people-list"></div>
+      </div>
     </aside>
 
     <section class="feed">
@@ -48,6 +54,12 @@
           <input id="postTags" type="text" placeholder="tags: family, trip, win" />
           <button type="submit" class="primary">Post</button>
         </div>
+        <div class="composer-row composer-row-secondary">
+          <div class="people-dropdown-wrap">
+            <button id="postPeopleBtn" class="ghost" type="button" aria-haspopup="menu" aria-expanded="false">Tag people</button>
+            <div id="postPeopleMenu" class="people-dropdown hidden"></div>
+          </div>
+        </div>
         <div class="composer-tools">
           <label class="tool-upload">📷 Photo/Video<input id="postMedia" type="file" accept="image/*,video/*" multiple hidden /></label>
           <div id="mediaPreview" class="media-preview"></div>
@@ -56,6 +68,7 @@
 
       <div class="filters">
         <input id="searchInput" type="search" placeholder="Search memories..." />
+        <button id="openFilterBtn" class="ghost" type="button">Advanced filter</button>
         <select id="sortSelect">
           <option value="newest">Newest first</option>
           <option value="oldest">Oldest first</option>
@@ -86,6 +99,37 @@
       </select>
 
       <button id="settingsClearBtn" class="danger" type="button">Clear all memories</button>
+    </div>
+  </div>
+
+  <div id="personModal" class="settings-modal hidden" role="dialog" aria-modal="true" aria-labelledby="personModalTitle">
+    <div class="settings-panel" role="document">
+      <div class="settings-head">
+        <h2 id="personModalTitle">Add person</h2>
+        <button id="personModalCloseBtn" class="action-btn" type="button" aria-label="Close person modal">✕</button>
+      </div>
+      <label class="settings-label" for="personNameInput">Name</label>
+      <input id="personNameInput" class="settings-select" type="text" maxlength="40" />
+      <label class="settings-label" for="personRelationshipInput">Relationship</label>
+      <input id="personRelationshipInput" class="settings-select" type="text" maxlength="40" />
+      <label class="settings-label" for="personPicInput">Profile picture</label>
+      <input id="personPicInput" class="settings-select" type="file" accept="image/*" />
+      <button id="savePersonBtn" class="primary" type="button">Save person</button>
+    </div>
+  </div>
+
+  <div id="filterModal" class="settings-modal hidden" role="dialog" aria-modal="true" aria-labelledby="filterModalTitle">
+    <div class="settings-panel" role="document">
+      <div class="settings-head">
+        <h2 id="filterModalTitle">Filter posts</h2>
+        <button id="filterModalCloseBtn" class="action-btn" type="button" aria-label="Close filter modal">✕</button>
+      </div>
+      <label class="settings-label" for="tagFilterInput">Tags (comma separated)</label>
+      <input id="tagFilterInput" class="settings-select" type="text" placeholder="family, trip" />
+      <label class="settings-label">People</label>
+      <div id="personFilterList" class="person-filter-list"></div>
+      <button id="applyFilterBtn" class="primary" type="button">Apply filter</button>
+      <button id="clearFilterBtn" class="ghost" type="button">Clear filter</button>
     </div>
   </div>
 
