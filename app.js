@@ -28,7 +28,12 @@ const els = {
   importFile: document.getElementById('importFile'),
   accountMenuBtn: document.getElementById('accountMenuBtn'),
   accountMenu: document.getElementById('accountMenu'),
-  toastStack: document.getElementById('toastStack'),
+  messageModal: document.getElementById('messageModal'),
+  messageModalTitle: document.getElementById('messageModalTitle'),
+  messageModalText: document.getElementById('messageModalText'),
+  messageModalInput: document.getElementById('messageModalInput'),
+  messageModalCancel: document.getElementById('messageModalCancel'),
+  messageModalConfirm: document.getElementById('messageModalConfirm'),
 };
 
 const state = {
@@ -52,15 +57,89 @@ function deepCopy(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
-function toast(message, type = 'ok') {
-  const item = document.createElement('div');
-  item.className = `toast toast-${type}`;
-  item.textContent = message;
-  els.toastStack.append(item);
+function openModalOverlay(modalEl) {
+  modalEl.classList.remove('hidden');
+  requestAnimationFrame(() => modalEl.classList.add('is-open'));
+}
+
+function closeModalOverlay(modalEl) {
+  modalEl.classList.remove('is-open');
   window.setTimeout(() => {
-    item.classList.add('toast-hide');
-    window.setTimeout(() => item.remove(), 180);
-  }, 1800);
+    if (!modalEl.classList.contains('is-open')) modalEl.classList.add('hidden');
+  }, 180);
+}
+
+function showModalMessage(options = {}) {
+  const {
+    title = 'mybook',
+    message = '',
+    confirmText = 'OK',
+    cancelText = 'Cancel',
+    showCancel = false,
+    input = null,
+  } = options;
+
+  return new Promise((resolve) => {
+    let done = false;
+
+    const finish = (result) => {
+      if (done) return;
+      done = true;
+      closeModalOverlay(els.messageModal);
+      els.messageModal.removeEventListener('click', onBackdropClick);
+      document.removeEventListener('keydown', onEscape);
+      els.messageModalCancel.removeEventListener('click', onCancel);
+      els.messageModalConfirm.removeEventListener('click', onConfirm);
+      resolve(result);
+    };
+
+    const onCancel = () => finish(null);
+    const onConfirm = () => finish(els.messageModalInput.classList.contains('hidden') ? true : els.messageModalInput.value.trim());
+    const onBackdropClick = (event) => {
+      if (event.target === els.messageModal) onCancel();
+    };
+    const onEscape = (event) => {
+      if (event.key === 'Escape' && !els.messageModal.classList.contains('hidden')) onCancel();
+    };
+
+    els.messageModalTitle.textContent = title;
+    els.messageModalText.textContent = message;
+    els.messageModalConfirm.textContent = confirmText;
+    els.messageModalCancel.textContent = cancelText;
+    els.messageModalCancel.classList.toggle('hidden', !showCancel);
+
+    if (input) {
+      els.messageModalInput.classList.remove('hidden');
+      els.messageModalInput.value = input.defaultValue || '';
+      els.messageModalInput.placeholder = input.placeholder || '';
+    } else {
+      els.messageModalInput.classList.add('hidden');
+      els.messageModalInput.value = '';
+      els.messageModalInput.placeholder = '';
+    }
+
+    els.messageModalCancel.addEventListener('click', onCancel);
+    els.messageModalConfirm.addEventListener('click', onConfirm);
+    els.messageModal.addEventListener('click', onBackdropClick);
+    document.addEventListener('keydown', onEscape);
+
+    openModalOverlay(els.messageModal);
+    if (input) els.messageModalInput.focus();
+    else els.messageModalConfirm.focus();
+  });
+}
+
+function toast(message, type = 'ok') {
+  const titleByType = {
+    error: 'Could not save',
+    warn: 'Heads up',
+    ok: 'mybook',
+  };
+  void showModalMessage({
+    title: titleByType[type] || 'mybook',
+    message,
+    confirmText: 'Got it',
+  });
 }
 
 function resolveTheme(mode) {
@@ -195,7 +274,7 @@ function migrateV2ToV3(rawV2 = {}) {
   return migrated;
 }
 
-function load() {
+async function load() {
   let loadedData = null;
 
   const savedV3 = localStorage.getItem(STORAGE_KEY_V3);
@@ -212,7 +291,6 @@ function load() {
     if (savedV2) {
       try {
         loadedData = migrateV2ToV3(JSON.parse(savedV2));
-        toast('Migrated local data to mybook_v3.', 'ok');
       } catch {
         loadedData = null;
       }
@@ -222,7 +300,14 @@ function load() {
   state.data = loadedData || makeDefaultData();
 
   if (!state.data.profile.name) {
-    const enteredName = prompt('Welcome to mybook. What is your name?')?.trim();
+    const enteredName = await showModalMessage({
+      title: 'Welcome to mybook',
+      message: 'What is your name?',
+      confirmText: 'Save',
+      cancelText: 'Skip',
+      showCancel: true,
+      input: { placeholder: 'My name', defaultValue: '' },
+    });
     state.data.profile.name = enteredName || 'Mybook User';
   }
 
@@ -300,17 +385,11 @@ function getVisiblePosts() {
 
 function openSettings() {
   closeAccountMenu();
-  els.settingsModal.classList.remove('hidden');
-  requestAnimationFrame(() => els.settingsModal.classList.add('is-open'));
+  openModalOverlay(els.settingsModal);
 }
 
 function closeSettings() {
-  els.settingsModal.classList.remove('is-open');
-  window.setTimeout(() => {
-    if (!els.settingsModal.classList.contains('is-open')) {
-      els.settingsModal.classList.add('hidden');
-    }
-  }, 180);
+  closeModalOverlay(els.settingsModal);
 }
 
 function openAccountMenu() {
@@ -623,15 +702,30 @@ window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () 
 });
 
 els.settingsClearBtn.addEventListener('click', () => {
-  if (!confirm('Delete all profile data and memories on this device?')) return;
-  localStorage.removeItem(STORAGE_KEY_V3);
-  localStorage.removeItem(STORAGE_KEY_V2);
-  location.reload();
+  void (async () => {
+    const confirmed = await showModalMessage({
+      title: 'Clear all memories',
+      message: 'Delete all profile data and memories on this device?',
+      confirmText: 'Delete',
+      cancelText: 'Cancel',
+      showCancel: true,
+    });
+    if (!confirmed) return;
+    localStorage.removeItem(STORAGE_KEY_V3);
+    localStorage.removeItem(STORAGE_KEY_V2);
+    location.reload();
+  })();
 });
 
 els.updateAppBtn.addEventListener('click', async () => {
   closeAccountMenu();
-  const proceed = confirm('Download the latest app files now? Your saved memories will stay on this device.');
+  const proceed = await showModalMessage({
+    title: 'Update app',
+    message: 'Download the latest app files now? Your saved memories will stay on this device.',
+    confirmText: 'Update',
+    cancelText: 'Cancel',
+    showCancel: true,
+  });
   if (!proceed) return;
 
   try {
@@ -711,6 +805,10 @@ if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('sw.js').catch(() => {});
 }
 
-load();
-renderAvatar();
-renderPosts();
+async function init() {
+  await load();
+  renderAvatar();
+  renderPosts();
+}
+
+init();

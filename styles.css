@@ -370,32 +370,62 @@ textarea:focus-visible, input:focus-visible, select:focus-visible {
 }
 #settingsClearBtn { width: 100%; margin-top: var(--space-3); }
 
-.toast-stack {
+.message-modal {
   position: fixed;
-  right: 14px;
-  bottom: 14px;
-  display: grid;
-  gap: 8px;
+  inset: 0;
   z-index: 90;
+  background: var(--overlay);
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  opacity: 0;
+  pointer-events: none;
 }
-.toast {
+.message-modal.is-open {
+  opacity: 1;
+  pointer-events: auto;
+}
+.message-panel {
+  width: min(420px, 100%);
   background: var(--surface-1);
   border: 1px solid var(--border);
-  border-left: 4px solid var(--accent);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-lg);
   box-shadow: var(--shadow-2);
-  padding: 9px 12px;
-  min-width: 180px;
+  padding: var(--space-3);
+  transform: translateY(8px);
+  display: grid;
+  gap: 10px;
 }
-.toast-warn { border-left-color: #e2a700; }
-.toast-error { border-left-color: var(--danger); }
-.toast-hide { opacity: 0; transform: translateY(5px); }
+.message-modal.is-open .message-panel {
+  transform: translateY(0);
+}
+.message-title {
+  margin: 0;
+}
+.message-text {
+  margin: 0;
+  color: var(--text-2);
+}
+.message-input {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-2);
+  color: var(--text-1);
+  padding: 10px 12px;
+  font: inherit;
+}
+.message-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
 
 .hidden { display: none; }
 
 @media (prefers-reduced-motion: no-preference) {
   .settings-modal,
-  .toast,
+  .message-modal,
   .post-action-btn,
   button,
   .import-label,
@@ -437,11 +467,5 @@ textarea:focus-visible, input:focus-visible, select:focus-visible {
 
   .post-actions {
     grid-template-columns: 1fr;
-  }
-
-  .toast-stack {
-    left: 10px;
-    right: 10px;
-    bottom: 10px;
   }
 }
