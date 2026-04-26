@@ -646,7 +646,7 @@ function renderPosts() {
     node.querySelector('.share-btn').addEventListener('click', async () => {
       const choice = await showModalMessage({
         title: 'Share memory',
-        message: 'Quick share includes text, app graphic, and uploaded media. Memory share exports JSON that another mybook can import.',
+        message: 'Quick share includes text and uploaded media. Memory share exports JSON that another mybook can import.',
         confirmText: 'Quick share',
         cancelText: 'Memory share',
         showCancel: true,
@@ -1132,21 +1132,9 @@ function dataUrlToFile(dataUrl, fallbackName) {
   return new File([bytes], fallbackName, { type: mime });
 }
 
-async function fetchAppGraphicFile() {
-  const response = await fetch('icon-192.svg');
-  const blob = await response.blob();
-  return new File([blob], 'mybook-icon.svg', { type: blob.type || 'image/svg+xml' });
-}
-
 async function quickSharePost(post) {
   const shareText = buildPostShareText(post);
   const files = [];
-
-  try {
-    files.push(await fetchAppGraphicFile());
-  } catch {
-    // continue without app icon
-  }
 
   (post.media || []).forEach((mediaItem, index) => {
     const fallbackName = mediaItem.name || `memory-media-${index + 1}.${mediaItem.type === 'video' ? 'mp4' : 'jpg'}`;
