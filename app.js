@@ -17,6 +17,9 @@ const els = {
   postPeopleMenu: document.getElementById('postPeopleMenu'),
   postMedia: document.getElementById('postMedia'),
   mediaPreview: document.getElementById('mediaPreview'),
+  openComposeBtn: document.getElementById('openComposeBtn'),
+  composeModal: document.getElementById('composeModal'),
+  composeModalCloseBtn: document.getElementById('composeModalCloseBtn'),
   searchInput: document.getElementById('searchInput'),
   sortSelect: document.getElementById('sortSelect'),
   openFilterBtn: document.getElementById('openFilterBtn'),
@@ -537,6 +540,16 @@ function closeSettings() {
   closeModalOverlay(els.settingsModal);
 }
 
+function openComposeModal() {
+  renderPeopleList();
+  renderPostPeopleMenu();
+  openModalOverlay(els.composeModal);
+}
+
+function closeComposeModal() {
+  closeModalOverlay(els.composeModal);
+}
+
 function openAccountMenu() {
   els.accountMenu.classList.remove('hidden');
   els.accountMenuBtn.setAttribute('aria-expanded', 'true');
@@ -870,6 +883,7 @@ els.postForm.addEventListener('submit', (event) => {
   els.postPeopleBtn.textContent = 'Tag people';
   els.postPeopleMenu.classList.add('hidden');
   renderMediaPreview();
+  closeComposeModal();
 });
 
 els.searchInput.addEventListener('input', renderPosts);
@@ -887,6 +901,12 @@ els.addPersonBtn.addEventListener('click', () => {
   els.personRelationshipInput.value = '';
   els.personPicInput.value = '';
   openModalOverlay(els.personModal);
+});
+
+els.openComposeBtn.addEventListener('click', openComposeModal);
+els.composeModalCloseBtn.addEventListener('click', closeComposeModal);
+els.composeModal.addEventListener('click', (event) => {
+  if (event.target === els.composeModal) closeComposeModal();
 });
 
 els.personModalCloseBtn.addEventListener('click', () => closeModalOverlay(els.personModal));
@@ -978,6 +998,9 @@ els.settingsModal.addEventListener('click', (event) => {
 document.addEventListener('keydown', (event) => {
   if (event.key === 'Escape' && !els.settingsModal.classList.contains('hidden')) {
     closeSettings();
+  }
+  if (event.key === 'Escape' && !els.composeModal.classList.contains('hidden')) {
+    closeComposeModal();
   }
 });
 
