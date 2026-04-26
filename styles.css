@@ -71,7 +71,8 @@ button, .import-label, .tool-upload {
 }
 .primary { background: var(--fb-blue); color: #fff; }
 .ghost { background: var(--ghost-bg); color: var(--ghost-text); }
-.danger { background: var(--danger-bg); color: var(--danger-text); width: 100%; margin-top: 14px; }
+.danger { background: var(--danger-bg); color: var(--danger-text); }
+#settingsClearBtn { width: 100%; margin-top: 14px; }
 
 .shell {
   max-width: 1120px;
