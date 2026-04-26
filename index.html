@@ -15,10 +15,15 @@
   <header class="topbar">
     <div class="brand">mybook</div>
     <div class="top-actions">
-      <button id="settingsBtn" class="ghost">Settings</button>
-      <button id="updateAppBtn" class="ghost">Update app</button>
-      <button id="exportBtn" class="ghost">Export</button>
-      <label class="ghost import-label">Import<input id="importFile" type="file" accept="application/json" hidden /></label>
+      <div class="account-menu-wrap">
+        <button id="accountMenuBtn" class="ghost account-trigger" type="button" aria-haspopup="menu" aria-expanded="false">Account ⚙️</button>
+        <div id="accountMenu" class="account-menu hidden" role="menu">
+          <button id="settingsBtn" class="menu-item" type="button" role="menuitem">Settings</button>
+          <button id="updateAppBtn" class="menu-item" type="button" role="menuitem">Update app</button>
+          <button id="exportBtn" class="menu-item" type="button" role="menuitem">Export backup</button>
+          <label class="menu-item import-label" role="menuitem">Import backup<input id="importFile" type="file" accept="application/json" hidden /></label>
+        </div>
+      </div>
     </div>
   </header>
 
@@ -92,8 +97,14 @@
           <div class="post-author"></div>
           <div class="post-date"></div>
         </div>
-        <button type="button" class="edit-post action-btn" title="Edit memory">Edit</button>
-        <button type="button" class="delete-post action-btn danger-text" title="Delete memory">Delete</button>
+        <div class="post-menu-wrap">
+          <button type="button" class="post-menu-btn action-btn" title="Post actions" aria-haspopup="menu" aria-expanded="false">⋯</button>
+          <div class="post-menu hidden" role="menu">
+            <button type="button" class="menu-item edit-post" role="menuitem">Edit</button>
+            <button type="button" class="menu-item delete-post danger-text" role="menuitem">Delete</button>
+            <button type="button" class="menu-item copy-post-link" role="menuitem">Copy link</button>
+          </div>
+        </div>
       </div>
       <p class="post-text"></p>
       <div class="post-edit-editor inline-editor hidden">
@@ -106,7 +117,9 @@
       <div class="post-media"></div>
       <div class="tag-list"></div>
       <div class="post-actions">
-        <button class="like-btn">👍 Like</button>
+        <button class="post-action-btn like-btn" type="button">👍 Like</button>
+        <button class="post-action-btn comment-btn" type="button">💬 Comment</button>
+        <button class="post-action-btn share-btn" type="button">↗ Share</button>
       </div>
       <section class="comments">
         <div class="comment-list">
@@ -133,6 +146,8 @@
       </section>
     </article>
   </template>
+
+  <div id="toastStack" class="toast-stack" aria-live="polite" aria-atomic="true"></div>
 
   <script src="app.js"></script>
 </body>

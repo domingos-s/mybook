@@ -1,4 +1,5 @@
-const STORAGE_KEY = 'mybook_v2';
+const STORAGE_KEY_V3 = 'mybook_v3';
+const STORAGE_KEY_V2 = 'mybook_v2';
 
 const els = {
   profileName: document.getElementById('profileName'),
@@ -25,16 +26,42 @@ const els = {
   updateAppBtn: document.getElementById('updateAppBtn'),
   exportBtn: document.getElementById('exportBtn'),
   importFile: document.getElementById('importFile'),
+  accountMenuBtn: document.getElementById('accountMenuBtn'),
+  accountMenu: document.getElementById('accountMenu'),
+  toastStack: document.getElementById('toastStack'),
 };
 
 const state = {
-  profile: { name: '', bio: '', avatarDataUrl: '' },
-  posts: [],
+  data: makeDefaultData(),
   pendingMedia: [],
-  preferences: {
-    theme: 'system',
-  },
 };
+
+function makeDefaultData() {
+  return {
+    version: 3,
+    profile: { name: '', bio: '', avatarDataUrl: '' },
+    postsById: {},
+    postOrder: [],
+    preferences: {
+      theme: 'system',
+    },
+  };
+}
+
+function deepCopy(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+
+function toast(message, type = 'ok') {
+  const item = document.createElement('div');
+  item.className = `toast toast-${type}`;
+  item.textContent = message;
+  els.toastStack.append(item);
+  window.setTimeout(() => {
+    item.classList.add('toast-hide');
+    window.setTimeout(() => item.remove(), 180);
+  }, 1800);
+}
 
 function resolveTheme(mode) {
   if (mode === 'dark' || mode === 'light') return mode;
@@ -53,33 +80,28 @@ async function clearAppCaches() {
 }
 
 function save() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  localStorage.setItem(STORAGE_KEY_V3, JSON.stringify(state.data));
 }
 
-function load() {
-  const saved = localStorage.getItem(STORAGE_KEY);
-  if (saved) {
-    try {
-      const parsed = JSON.parse(saved);
-      state.profile = normalizeProfile(parsed.profile || {});
-      state.posts = Array.isArray(parsed.posts) ? parsed.posts : [];
-      state.preferences = normalizePreferences(parsed.preferences || {});
-    } catch {
-      // ignore malformed local data
-    }
+function updateState(mutator, options = {}) {
+  const { render = true, persist = true } = options;
+  const snapshot = deepCopy(state.data);
+  mutator(state.data);
+
+  try {
+    if (persist) save();
+  } catch {
+    state.data = snapshot;
+    toast('Could not save this change on your device.', 'error');
+    return false;
   }
 
-  if (!state.profile.name) {
-    const enteredName = prompt('Welcome to mybook. What is your name?')?.trim();
-    state.profile.name = enteredName || 'Mybook User';
-    save();
+  if (render) {
+    renderAvatar();
+    renderPosts();
   }
 
-  els.profileName.value = state.profile.name;
-  els.profileBio.value = state.profile.bio || '';
-  els.themeSelect.value = state.preferences.theme;
-  applyTheme(state.preferences.theme);
-  renderAvatar();
+  return true;
 }
 
 function normalizeProfile(profile = {}) {
@@ -89,9 +111,11 @@ function normalizeProfile(profile = {}) {
       : (profile.avatarDataUrl && typeof profile.avatarDataUrl.dataUrl === 'string' ? profile.avatarDataUrl.dataUrl : '');
 
   return {
-    ...state.profile,
-    ...profile,
+    ...makeDefaultData().profile,
+    ...(profile && typeof profile === 'object' ? profile : {}),
     avatarDataUrl,
+    name: typeof profile.name === 'string' && profile.name.trim() ? profile.name.trim() : 'Mybook User',
+    bio: typeof profile.bio === 'string' ? profile.bio : '',
   };
 }
 
@@ -100,10 +124,116 @@ function normalizePreferences(preferences = {}) {
   const normalizedTheme = ['light', 'dark', 'system'].includes(theme) ? theme : 'system';
 
   return {
-    ...state.preferences,
-    ...preferences,
+    ...makeDefaultData().preferences,
+    ...(preferences && typeof preferences === 'object' ? preferences : {}),
     theme: normalizedTheme,
   };
+}
+
+function normalizeComment(comment = {}) {
+  return {
+    id: typeof comment.id === 'string' ? comment.id : crypto.randomUUID(),
+    text: typeof comment.text === 'string' ? comment.text : '',
+    createdAt: typeof comment.createdAt === 'string' ? comment.createdAt : new Date().toISOString(),
+    updatedAt: typeof comment.updatedAt === 'string' ? comment.updatedAt : undefined,
+  };
+}
+
+function normalizePost(post = {}) {
+  return {
+    id: typeof post.id === 'string' ? post.id : crypto.randomUUID(),
+    text: typeof post.text === 'string' ? post.text : '',
+    date: typeof post.date === 'string' ? post.date : '',
+    createdAt: typeof post.createdAt === 'string' ? post.createdAt : new Date().toISOString(),
+    updatedAt: typeof post.updatedAt === 'string' ? post.updatedAt : undefined,
+    tags: Array.isArray(post.tags) ? post.tags.filter((tag) => typeof tag === 'string').map((tag) => tag.trim()).filter(Boolean) : [],
+    media: Array.isArray(post.media)
+      ? post.media.filter((m) => m && typeof m.dataUrl === 'string' && (m.type === 'image' || m.type === 'video')).map((m) => ({
+        dataUrl: m.dataUrl,
+        type: m.type,
+        name: typeof m.name === 'string' ? m.name : (m.type === 'video' ? 'video' : 'image'),
+      }))
+      : [],
+    liked: Boolean(post.liked),
+    comments: Array.isArray(post.comments) ? post.comments.map(normalizeComment).filter((c) => c.text.trim()) : [],
+  };
+}
+
+function normalizeV3(raw = {}) {
+  const normalized = makeDefaultData();
+  normalized.profile = normalizeProfile(raw.profile || {});
+  normalized.preferences = normalizePreferences(raw.preferences || {});
+
+  const incomingPostsById = raw.postsById && typeof raw.postsById === 'object' ? raw.postsById : {};
+  const incomingOrder = Array.isArray(raw.postOrder) ? raw.postOrder : [];
+
+  Object.keys(incomingPostsById).forEach((postId) => {
+    const post = normalizePost(incomingPostsById[postId]);
+    normalized.postsById[post.id] = post;
+  });
+
+  normalized.postOrder = incomingOrder
+    .filter((id) => typeof id === 'string' && normalized.postsById[id])
+    .concat(Object.keys(normalized.postsById).filter((id) => !incomingOrder.includes(id)));
+
+  normalized.version = 3;
+  return normalized;
+}
+
+function migrateV2ToV3(rawV2 = {}) {
+  const migrated = makeDefaultData();
+  migrated.profile = normalizeProfile(rawV2.profile || {});
+  migrated.preferences = normalizePreferences(rawV2.preferences || {});
+
+  const posts = Array.isArray(rawV2.posts) ? rawV2.posts : [];
+  posts.forEach((oldPost) => {
+    const post = normalizePost(oldPost);
+    migrated.postsById[post.id] = post;
+    migrated.postOrder.push(post.id);
+  });
+
+  return migrated;
+}
+
+function load() {
+  let loadedData = null;
+
+  const savedV3 = localStorage.getItem(STORAGE_KEY_V3);
+  if (savedV3) {
+    try {
+      loadedData = normalizeV3(JSON.parse(savedV3));
+    } catch {
+      loadedData = null;
+    }
+  }
+
+  if (!loadedData) {
+    const savedV2 = localStorage.getItem(STORAGE_KEY_V2);
+    if (savedV2) {
+      try {
+        loadedData = migrateV2ToV3(JSON.parse(savedV2));
+        toast('Migrated local data to mybook_v3.', 'ok');
+      } catch {
+        loadedData = null;
+      }
+    }
+  }
+
+  state.data = loadedData || makeDefaultData();
+
+  if (!state.data.profile.name) {
+    const enteredName = prompt('Welcome to mybook. What is your name?')?.trim();
+    state.data.profile.name = enteredName || 'Mybook User';
+  }
+
+  updateState((draft) => {
+    draft.version = 3;
+  }, { render: false });
+
+  els.profileName.value = state.data.profile.name;
+  els.profileBio.value = state.data.profile.bio || '';
+  els.themeSelect.value = state.data.preferences.theme;
+  applyTheme(state.data.preferences.theme);
 }
 
 function initials(name) {
@@ -116,12 +246,12 @@ function initials(name) {
 }
 
 function renderAvatar() {
-  if (state.profile.avatarDataUrl) {
+  if (state.data.profile.avatarDataUrl) {
     els.avatarInitials.textContent = '';
-    els.avatarInitials.style.backgroundImage = `url("${state.profile.avatarDataUrl}")`;
+    els.avatarInitials.style.backgroundImage = `url("${state.data.profile.avatarDataUrl}")`;
   } else {
     els.avatarInitials.style.backgroundImage = '';
-    els.avatarInitials.textContent = initials(state.profile.name);
+    els.avatarInitials.textContent = initials(state.data.profile.name);
   }
 }
 
@@ -149,50 +279,60 @@ function renderMediaPreview() {
   });
 }
 
-function updatePost(postId, updater) {
-  state.posts = state.posts.map((post) => (post.id === postId ? updater(post) : post));
-  save();
-  renderPosts();
-}
-
-function updateComment(postId, commentId, updater) {
-  updatePost(postId, (post) => ({
-    ...post,
-    comments: (Array.isArray(post.comments) ? post.comments : []).map((comment) => (
-      comment.id === commentId ? updater(comment) : comment
-    )),
-  }));
-}
-
-function deleteComment(postId, commentId) {
-  updatePost(postId, (post) => ({
-    ...post,
-    comments: (Array.isArray(post.comments) ? post.comments : []).filter((comment) => comment.id !== commentId),
-  }));
-}
-
-function renderPosts() {
+function getVisiblePosts() {
   const q = els.searchInput.value.trim().toLowerCase();
   const order = els.sortSelect.value;
 
-  let filtered = state.posts.filter((post) => {
-    const hay = `${post.text}\n${(post.tags || []).join(' ')}`.toLowerCase();
-    return hay.includes(q);
-  });
+  const posts = state.data.postOrder
+    .map((id) => state.data.postsById[id])
+    .filter(Boolean)
+    .filter((post) => {
+      const hay = `${post.text}\n${(post.tags || []).join(' ')}`.toLowerCase();
+      return hay.includes(q);
+    });
 
-  filtered = filtered.sort((a, b) => {
+  return posts.sort((a, b) => {
     const lhs = new Date(a.date || a.createdAt).getTime();
     const rhs = new Date(b.date || b.createdAt).getTime();
     return order === 'oldest' ? lhs - rhs : rhs - lhs;
   });
+}
+
+function openSettings() {
+  closeAccountMenu();
+  els.settingsModal.classList.remove('hidden');
+  requestAnimationFrame(() => els.settingsModal.classList.add('is-open'));
+}
+
+function closeSettings() {
+  els.settingsModal.classList.remove('is-open');
+  window.setTimeout(() => {
+    if (!els.settingsModal.classList.contains('is-open')) {
+      els.settingsModal.classList.add('hidden');
+    }
+  }, 180);
+}
+
+function openAccountMenu() {
+  els.accountMenu.classList.remove('hidden');
+  els.accountMenuBtn.setAttribute('aria-expanded', 'true');
+}
+
+function closeAccountMenu() {
+  els.accountMenu.classList.add('hidden');
+  els.accountMenuBtn.setAttribute('aria-expanded', 'false');
+}
+
+function renderPosts() {
+  const filtered = getVisiblePosts();
 
   els.feedList.innerHTML = '';
   els.emptyState.classList.toggle('hidden', filtered.length > 0);
 
   filtered.forEach((post) => {
     const node = els.postTemplate.content.firstElementChild.cloneNode(true);
-    node.querySelector('.mini-avatar').textContent = initials(state.profile.name);
-    node.querySelector('.post-author').textContent = state.profile.name;
+    node.querySelector('.mini-avatar').textContent = initials(state.data.profile.name);
+    node.querySelector('.post-author').textContent = state.data.profile.name;
     node.querySelector('.post-date').textContent = formatDate(post.date || post.createdAt);
     node.querySelector('.post-text').textContent = post.text;
 
@@ -220,13 +360,47 @@ function renderPosts() {
     likeBtn.classList.toggle('active', !!post.liked);
     likeBtn.textContent = post.liked ? '👍 Liked' : '👍 Like';
     likeBtn.addEventListener('click', () => {
-      updatePost(post.id, (existing) => ({ ...existing, liked: !existing.liked }));
+      updateState((draft) => {
+        draft.postsById[post.id].liked = !draft.postsById[post.id].liked;
+      });
+    });
+
+    node.querySelector('.comment-btn').addEventListener('click', () => {
+      node.querySelector('.comment-input').focus();
+    });
+
+    node.querySelector('.share-btn').addEventListener('click', () => {
+      toast('Share placeholder: local-only for now.');
+    });
+
+    const postMenuWrap = node.querySelector('.post-menu-wrap');
+    const postMenuBtn = node.querySelector('.post-menu-btn');
+    const postMenu = node.querySelector('.post-menu');
+    postMenuBtn.addEventListener('click', (event) => {
+      event.stopPropagation();
+      const isHidden = postMenu.classList.contains('hidden');
+      document.querySelectorAll('.post-menu').forEach((menu) => menu.classList.add('hidden'));
+      postMenuBtn.setAttribute('aria-expanded', String(isHidden));
+      postMenu.classList.toggle('hidden', !isHidden);
+    });
+
+    node.querySelector('.copy-post-link').addEventListener('click', async () => {
+      const link = `${window.location.origin}${window.location.pathname}#post-${post.id}`;
+      try {
+        if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(link);
+        toast('Post link copied.');
+      } catch {
+        toast('Copy link placeholder ready (clipboard unavailable).', 'warn');
+      }
+      postMenu.classList.add('hidden');
     });
 
     node.querySelector('.delete-post').addEventListener('click', () => {
-      state.posts = state.posts.filter((p) => p.id !== post.id);
-      save();
-      renderPosts();
+      updateState((draft) => {
+        delete draft.postsById[post.id];
+        draft.postOrder = draft.postOrder.filter((id) => id !== post.id);
+      });
+      toast('Memory deleted.');
     });
 
     const postEditBtn = node.querySelector('.edit-post');
@@ -238,6 +412,7 @@ function renderPosts() {
       postText.classList.add('hidden');
       postEditor.classList.remove('hidden');
       postEditInput.focus();
+      postMenu.classList.add('hidden');
     });
 
     postEditCancelBtn.addEventListener('click', () => {
@@ -249,11 +424,12 @@ function renderPosts() {
       const nextText = postEditInput.value.trim();
       if (!nextText && (!Array.isArray(post.media) || post.media.length === 0)) return;
 
-      updatePost(post.id, (existing) => ({
-        ...existing,
-        text: nextText,
-        updatedAt: new Date().toISOString(),
-      }));
+      const updated = updateState((draft) => {
+        draft.postsById[post.id].text = nextText;
+        draft.postsById[post.id].updatedAt = new Date().toISOString();
+      });
+
+      if (updated) toast('Memory saved.');
     });
 
     const commentList = node.querySelector('.comment-list');
@@ -264,7 +440,7 @@ function renderPosts() {
       item.classList.remove('comment-template', 'hidden');
 
       const author = item.querySelector('.comment-author');
-      author.textContent = state.profile.name;
+      author.textContent = state.data.profile.name;
 
       const text = item.querySelector('.comment-text');
       text.textContent = comment.text;
@@ -296,15 +472,24 @@ function renderPosts() {
         const nextText = editorInput.value.trim();
         if (!nextText) return;
 
-        updateComment(post.id, comment.id, (existingComment) => ({
-          ...existingComment,
-          text: nextText,
-          updatedAt: new Date().toISOString(),
-        }));
+        const updated = updateState((draft) => {
+          const commentsDraft = draft.postsById[post.id].comments || [];
+          draft.postsById[post.id].comments = commentsDraft.map((existingComment) => (
+            existingComment.id === comment.id
+              ? { ...existingComment, text: nextText, updatedAt: new Date().toISOString() }
+              : existingComment
+          ));
+        });
+
+        if (updated) toast('Comment saved.');
       });
 
       deleteBtn.addEventListener('click', () => {
-        deleteComment(post.id, comment.id);
+        updateState((draft) => {
+          const commentsDraft = draft.postsById[post.id].comments || [];
+          draft.postsById[post.id].comments = commentsDraft.filter((existingComment) => existingComment.id !== comment.id);
+        });
+        toast('Comment deleted.');
       });
 
       commentList.append(item);
@@ -322,10 +507,10 @@ function renderPosts() {
         createdAt: new Date().toISOString(),
       };
 
-      updatePost(post.id, (existing) => ({
-        ...existing,
-        comments: [...(Array.isArray(existing.comments) ? existing.comments : []), newComment],
-      }));
+      updateState((draft) => {
+        const commentsDraft = draft.postsById[post.id].comments || [];
+        draft.postsById[post.id].comments = [...commentsDraft, newComment];
+      });
 
       input.value = '';
     });
@@ -334,39 +519,26 @@ function renderPosts() {
   });
 }
 
-function openSettings() {
-  els.settingsModal.classList.remove('hidden');
-  requestAnimationFrame(() => els.settingsModal.classList.add('is-open'));
-}
-
-function closeSettings() {
-  els.settingsModal.classList.remove('is-open');
-  window.setTimeout(() => {
-    if (!els.settingsModal.classList.contains('is-open')) {
-      els.settingsModal.classList.add('hidden');
-    }
-  }, 180);
-}
-
 els.profileName.addEventListener('input', () => {
-  state.profile.name = els.profileName.value.trim() || 'Mybook User';
-  renderAvatar();
-  save();
-  renderPosts();
+  const entered = els.profileName.value.trim() || 'Mybook User';
+  updateState((draft) => {
+    draft.profile.name = entered;
+  });
 });
 
 els.profileBio.addEventListener('input', () => {
-  state.profile.bio = els.profileBio.value;
-  save();
+  updateState((draft) => {
+    draft.profile.bio = els.profileBio.value;
+  }, { render: false });
 });
 
 els.profilePicInput.addEventListener('change', async (event) => {
   const file = event.target.files?.[0];
   if (!file) return;
   const avatar = await fileToDataUrl(file);
-  state.profile.avatarDataUrl = avatar.dataUrl;
-  save();
-  renderAvatar();
+  updateState((draft) => {
+    draft.profile.avatarDataUrl = avatar.dataUrl;
+  });
 });
 
 els.postMedia.addEventListener('change', async (event) => {
@@ -380,7 +552,7 @@ els.postForm.addEventListener('submit', (event) => {
   const text = els.postText.value.trim();
   if (!text && state.pendingMedia.length === 0) return;
 
-  state.posts.push({
+  const post = normalizePost({
     id: crypto.randomUUID(),
     text,
     date: els.postDate.value,
@@ -391,20 +563,40 @@ els.postForm.addEventListener('submit', (event) => {
     comments: [],
   });
 
+  updateState((draft) => {
+    draft.postsById[post.id] = post;
+    draft.postOrder.unshift(post.id);
+  });
+
   els.postText.value = '';
   els.postTags.value = '';
   els.postDate.value = '';
   els.postMedia.value = '';
   state.pendingMedia = [];
   renderMediaPreview();
-  save();
-  renderPosts();
 });
 
 els.searchInput.addEventListener('input', renderPosts);
 els.sortSelect.addEventListener('change', renderPosts);
 
-els.settingsBtn.addEventListener('click', openSettings);
+els.accountMenuBtn.addEventListener('click', () => {
+  const isOpen = !els.accountMenu.classList.contains('hidden');
+  if (isOpen) closeAccountMenu();
+  else openAccountMenu();
+});
+
+document.addEventListener('click', (event) => {
+  if (!event.target.closest('.account-menu-wrap')) {
+    closeAccountMenu();
+  }
+  if (!event.target.closest('.post-menu-wrap')) {
+    document.querySelectorAll('.post-menu').forEach((menu) => menu.classList.add('hidden'));
+  }
+});
+
+els.settingsBtn.addEventListener('click', () => {
+  openSettings();
+});
 els.settingsCloseBtn.addEventListener('click', closeSettings);
 els.settingsModal.addEventListener('click', (event) => {
   if (event.target === els.settingsModal) {
@@ -418,24 +610,27 @@ document.addEventListener('keydown', (event) => {
 });
 
 els.themeSelect.addEventListener('change', () => {
-  state.preferences.theme = els.themeSelect.value;
-  applyTheme(state.preferences.theme);
-  save();
+  updateState((draft) => {
+    draft.preferences.theme = els.themeSelect.value;
+  }, { render: false });
+  applyTheme(state.data.preferences.theme);
 });
 
 window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
-  if (state.preferences.theme === 'system') {
+  if (state.data.preferences.theme === 'system') {
     applyTheme('system');
   }
 });
 
 els.settingsClearBtn.addEventListener('click', () => {
   if (!confirm('Delete all profile data and memories on this device?')) return;
-  localStorage.removeItem(STORAGE_KEY);
+  localStorage.removeItem(STORAGE_KEY_V3);
+  localStorage.removeItem(STORAGE_KEY_V2);
   location.reload();
 });
 
 els.updateAppBtn.addEventListener('click', async () => {
+  closeAccountMenu();
   const proceed = confirm('Download the latest app files now? Your saved memories will stay on this device.');
   if (!proceed) return;
 
@@ -461,7 +656,8 @@ els.updateAppBtn.addEventListener('click', async () => {
 });
 
 els.exportBtn.addEventListener('click', () => {
-  const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
+  closeAccountMenu();
+  const blob = new Blob([JSON.stringify(state.data, null, 2)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
@@ -470,18 +666,45 @@ els.exportBtn.addEventListener('click', () => {
   URL.revokeObjectURL(url);
 });
 
+function normalizeImportPayload(raw) {
+  if (!raw || typeof raw !== 'object') return makeDefaultData();
+
+  if (raw.version === 3 || raw.postsById || raw.postOrder) {
+    return normalizeV3(raw);
+  }
+
+  if (Array.isArray(raw.posts)) {
+    return migrateV2ToV3(raw);
+  }
+
+  return makeDefaultData();
+}
+
 els.importFile.addEventListener('change', async (event) => {
   const file = event.target.files?.[0];
   if (!file) return;
-  const text = await file.text();
-  const imported = JSON.parse(text);
-  if (!imported || typeof imported !== 'object') return;
-  state.profile = normalizeProfile(imported.profile || {});
-  state.posts = Array.isArray(imported.posts) ? imported.posts : [];
-  state.preferences = normalizePreferences(imported.preferences || {});
-  save();
-  load();
-  renderPosts();
+
+  try {
+    const text = await file.text();
+    const parsed = JSON.parse(text);
+    const imported = normalizeImportPayload(parsed);
+
+    state.data = imported;
+    updateState((draft) => {
+      draft.version = 3;
+    });
+
+    els.profileName.value = state.data.profile.name;
+    els.profileBio.value = state.data.profile.bio;
+    els.themeSelect.value = state.data.preferences.theme;
+    applyTheme(state.data.preferences.theme);
+    toast('Backup imported.');
+  } catch {
+    toast('Import failed: invalid JSON file.', 'error');
+  } finally {
+    event.target.value = '';
+    closeAccountMenu();
+  }
 });
 
 if ('serviceWorker' in navigator) {
@@ -489,4 +712,5 @@ if ('serviceWorker' in navigator) {
 }
 
 load();
+renderAvatar();
 renderPosts();
