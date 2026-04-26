@@ -1,4 +1,4 @@
-const CACHE_NAME = 'mybook-cache-v2';
+const CACHE_NAME = 'mybook-cache-v3';
 const APP_CACHE_PREFIX = 'mybook-cache-';
 const ASSETS = [
   './',
@@ -7,9 +7,7 @@ const ASSETS = [
   './app.js',
   './manifest.webmanifest',
   './icon-192.svg',
-  './icon-512.svg',
-  './icon-192-maskable.svg',
-  './icon-512-maskable.svg'
+  './icon-512.svg'
 ];
 
 self.addEventListener('install', (event) => {
