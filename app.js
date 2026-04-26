@@ -36,7 +36,7 @@ function load() {
   if (saved) {
     try {
       const parsed = JSON.parse(saved);
-      state.profile = { ...state.profile, ...(parsed.profile || {}) };
+      state.profile = normalizeProfile(parsed.profile || {});
       state.posts = Array.isArray(parsed.posts) ? parsed.posts : [];
     } catch {
       // ignore malformed local data
@@ -52,6 +52,19 @@ function load() {
   els.profileName.value = state.profile.name;
   els.profileBio.value = state.profile.bio || '';
   renderAvatar();
+}
+
+function normalizeProfile(profile = {}) {
+  const avatarDataUrl =
+    typeof profile.avatarDataUrl === 'string'
+      ? profile.avatarDataUrl
+      : (profile.avatarDataUrl && typeof profile.avatarDataUrl.dataUrl === 'string' ? profile.avatarDataUrl.dataUrl : '');
+
+  return {
+    ...state.profile,
+    ...profile,
+    avatarDataUrl,
+  };
 }
 
 function initials(name) {
@@ -153,6 +166,42 @@ function renderPosts() {
       renderPosts();
     });
 
+    const commentList = node.querySelector('.comment-list');
+    const comments = Array.isArray(post.comments) ? post.comments : [];
+    comments.forEach((comment) => {
+      const item = document.createElement('div');
+      item.className = 'comment-item';
+
+      const author = document.createElement('div');
+      author.className = 'comment-author';
+      author.textContent = state.profile.name;
+
+      const text = document.createElement('div');
+      text.className = 'comment-text';
+      text.textContent = comment.text;
+
+      item.append(author, text);
+      commentList.append(item);
+    });
+
+    node.querySelector('.comment-form').addEventListener('submit', (event) => {
+      event.preventDefault();
+      const input = event.currentTarget.querySelector('.comment-input');
+      const text = input.value.trim();
+      if (!text) return;
+
+      if (!Array.isArray(post.comments)) post.comments = [];
+      post.comments.push({
+        id: crypto.randomUUID(),
+        text,
+        createdAt: new Date().toISOString(),
+      });
+
+      input.value = '';
+      save();
+      renderPosts();
+    });
+
     els.feedList.append(node);
   });
 }
@@ -197,6 +246,7 @@ els.postForm.addEventListener('submit', (event) => {
     tags: els.postTags.value.split(',').map((tag) => tag.trim()).filter(Boolean),
     media: state.pendingMedia,
     liked: false,
+    comments: [],
   });
 
   els.postText.value = '';
@@ -234,7 +284,7 @@ els.importFile.addEventListener('change', async (event) => {
   const text = await file.text();
   const imported = JSON.parse(text);
   if (!imported || typeof imported !== 'object') return;
-  state.profile = { ...state.profile, ...(imported.profile || {}) };
+  state.profile = normalizeProfile(imported.profile || {});
   state.posts = Array.isArray(imported.posts) ? imported.posts : [];
   save();
   load();
