@@ -379,6 +379,12 @@ textarea:focus-visible, input:focus-visible, select:focus-visible {
   max-height: min(88vh, 920px);
   overflow: auto;
 }
+#composeModal {
+  z-index: 60;
+}
+#personModal {
+  z-index: 70;
+}
 .compose-form {
   margin-top: 12px;
 }
