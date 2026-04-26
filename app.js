@@ -17,6 +17,7 @@ const els = {
   emptyState: document.getElementById('emptyState'),
   postTemplate: document.getElementById('postTemplate'),
   clearBtn: document.getElementById('clearBtn'),
+  updateAppBtn: document.getElementById('updateAppBtn'),
   exportBtn: document.getElementById('exportBtn'),
   importFile: document.getElementById('importFile'),
 };
@@ -26,6 +27,12 @@ const state = {
   posts: [],
   pendingMedia: [],
 };
+
+async function clearAppCaches() {
+  if (!('caches' in window)) return;
+  const keys = await caches.keys();
+  await Promise.all(keys.filter((key) => key.startsWith('mybook-cache-')).map((key) => caches.delete(key)));
+}
 
 function save() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
@@ -266,6 +273,32 @@ els.clearBtn.addEventListener('click', () => {
   if (!confirm('Delete all profile data and memories on this device?')) return;
   localStorage.removeItem(STORAGE_KEY);
   location.reload();
+});
+
+
+els.updateAppBtn.addEventListener('click', async () => {
+  const proceed = confirm('Download the latest app files now? Your saved memories will stay on this device.');
+  if (!proceed) return;
+
+  try {
+    const registration = await navigator.serviceWorker.getRegistration();
+    if (registration) {
+      await registration.update();
+      if (registration.waiting) {
+        registration.waiting.postMessage({ type: 'SKIP_WAITING' });
+      }
+      if (registration.active) {
+        registration.active.postMessage({ type: 'CLEAR_APP_CACHE' });
+      }
+    }
+    await clearAppCaches();
+  } catch {
+    // ignore update/cache errors and continue to reload from network
+  }
+
+  const freshUrl = new URL(window.location.href);
+  freshUrl.searchParams.set('update', Date.now().toString());
+  window.location.replace(freshUrl.toString());
 });
 
 els.exportBtn.addEventListener('click', () => {
