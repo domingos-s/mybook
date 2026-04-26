@@ -20,8 +20,12 @@
   <main class="shell">
     <aside class="profile-card">
       <div class="cover"></div>
-      <div class="avatar" id="avatarInitials">D</div>
-      <input id="profileName" class="profile-name" value="Dom Santos" maxlength="40" />
+      <label class="avatar-wrap" for="profilePicInput" title="Upload profile picture">
+        <div class="avatar" id="avatarInitials">M</div>
+        <span class="avatar-edit">Edit photo</span>
+      </label>
+      <input id="profilePicInput" type="file" accept="image/*" hidden />
+      <input id="profileName" class="profile-name" maxlength="40" />
       <textarea id="profileBio" class="profile-bio" maxlength="140" placeholder="Add a short bio..."></textarea>
       <div class="privacy-note">Private. Offline-first. Stored only on this device.</div>
       <button id="clearBtn" class="danger">Clear all memories</button>
@@ -29,11 +33,15 @@
 
     <section class="feed">
       <form id="postForm" class="composer">
-        <textarea id="postText" rows="3" maxlength="1000" placeholder="What's a memory you want to save?"></textarea>
+        <textarea id="postText" rows="3" maxlength="1000" placeholder="What's on your mind?"></textarea>
         <div class="composer-row">
           <input id="postDate" type="date" />
           <input id="postTags" type="text" placeholder="tags: family, trip, win" />
           <button type="submit" class="primary">Post</button>
+        </div>
+        <div class="composer-tools">
+          <label class="tool-upload">📷 Photo/Video<input id="postMedia" type="file" accept="image/*,video/*" multiple hidden /></label>
+          <div id="mediaPreview" class="media-preview"></div>
         </div>
       </form>
 
@@ -65,7 +73,11 @@
         <button class="delete-post" title="Delete memory">×</button>
       </div>
       <p class="post-text"></p>
+      <div class="post-media"></div>
       <div class="tag-list"></div>
+      <div class="post-actions">
+        <button class="like-btn">👍 Like</button>
+      </div>
     </article>
   </template>
 

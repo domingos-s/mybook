@@ -1,0 +1,315 @@
+const STORAGE_KEY = 'mybook_v2';
+
+const els = {
+  profileName: document.getElementById('profileName'),
+  profileBio: document.getElementById('profileBio'),
+  avatarInitials: document.getElementById('avatarInitials'),
+  profilePicInput: document.getElementById('profilePicInput'),
+  postForm: document.getElementById('postForm'),
+  postText: document.getElementById('postText'),
+  postDate: document.getElementById('postDate'),
+  postTags: document.getElementById('postTags'),
+  postMedia: document.getElementById('postMedia'),
+  mediaPreview: document.getElementById('mediaPreview'),
+  searchInput: document.getElementById('searchInput'),
+  sortSelect: document.getElementById('sortSelect'),
+  feedList: document.getElementById('feedList'),
+  emptyState: document.getElementById('emptyState'),
+  postTemplate: document.getElementById('postTemplate'),
+  clearBtn: document.getElementById('clearBtn'),
+  exportBtn: document.getElementById('exportBtn'),
+  importFile: document.getElementById('importFile'),
+};
+
+const state = {
+  profile: { name: '', bio: '', avatarDataUrl: '' },
+  posts: [],
+  pendingMedia: [],
+};
+
+function makeId() {
+  if (globalThis.crypto && typeof globalThis.crypto.randomUUID === 'function') {
+    return globalThis.crypto.randomUUID();
+  }
+
+  return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function save() {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function load() {
+  const saved = localStorage.getItem(STORAGE_KEY);
+  if (saved) {
+    try {
+      const parsed = JSON.parse(saved);
+      state.profile = { ...state.profile, ...(parsed.profile || {}) };
+      state.posts = Array.isArray(parsed.posts) ? parsed.posts : [];
+    } catch {
+      // ignore malformed local data
+    }
+  }
+
+  if (!state.profile.name) {
+    const enteredName = prompt('Welcome to mybook. What is your name?')?.trim();
+    state.profile.name = enteredName || 'Mybook User';
+    save();
+  }
+
+  els.profileName.value = state.profile.name;
+  els.profileBio.value = state.profile.bio || '';
+  renderAvatar();
+}
+
+function initials(name) {
+  return name
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((chunk) => chunk[0].toUpperCase())
+    .join('') || 'M';
+}
+
+function renderAvatar() {
+  if (state.profile.avatarDataUrl) {
+    els.avatarInitials.textContent = '';
+    els.avatarInitials.style.backgroundImage = `url("${state.profile.avatarDataUrl}")`;
+  } else {
+    els.avatarInitials.style.backgroundImage = '';
+    els.avatarInitials.textContent = initials(state.profile.name);
+  }
+}
+
+function formatDate(dateStr) {
+  const d = dateStr ? new Date(dateStr) : new Date();
+  return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', year: 'numeric' }).format(d);
+}
+
+function compressImage(file, maxSize = 1280, quality = 0.75) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const img = new Image();
+      img.onload = () => {
+        const ratio = Math.min(1, maxSize / Math.max(img.width, img.height));
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.round(img.width * ratio);
+        canvas.height = Math.round(img.height * ratio);
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          reject(new Error('Unable to process image.'));
+          return;
+        }
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        resolve(canvas.toDataURL('image/jpeg', quality));
+      };
+      img.onerror = reject;
+      img.src = reader.result;
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+function fileToDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const isVideo = file.type.startsWith('video/');
+    if (isVideo && file.size > 2 * 1024 * 1024) {
+      reject(new Error('Videos larger than 2MB cannot be saved offline in this app.'));
+      return;
+    }
+
+    if (file.type.startsWith('image/')) {
+      compressImage(file)
+        .then((dataUrl) => resolve({ dataUrl, type: 'image', name: file.name }))
+        .catch(reject);
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = () => resolve({ dataUrl: reader.result, type: isVideo ? 'video' : 'image', name: file.name });
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+function renderMediaPreview() {
+  els.mediaPreview.innerHTML = '';
+  state.pendingMedia.forEach((item) => {
+    const chip = document.createElement('div');
+    chip.className = 'media-chip';
+    chip.textContent = `${item.type === 'video' ? '🎬' : '🖼️'} ${item.name}`;
+    els.mediaPreview.append(chip);
+  });
+}
+
+function renderPosts() {
+  const q = els.searchInput.value.trim().toLowerCase();
+  const order = els.sortSelect.value;
+
+  let filtered = state.posts.filter((post) => {
+    const hay = `${post.text}\n${(post.tags || []).join(' ')}`.toLowerCase();
+    return hay.includes(q);
+  });
+
+  filtered = filtered.sort((a, b) => {
+    const lhs = new Date(a.date || a.createdAt).getTime();
+    const rhs = new Date(b.date || b.createdAt).getTime();
+    return order === 'oldest' ? lhs - rhs : rhs - lhs;
+  });
+
+  els.feedList.innerHTML = '';
+  els.emptyState.classList.toggle('hidden', filtered.length > 0);
+
+  filtered.forEach((post) => {
+    const node = els.postTemplate.content.firstElementChild.cloneNode(true);
+    node.querySelector('.mini-avatar').textContent = initials(state.profile.name);
+    node.querySelector('.post-author').textContent = state.profile.name;
+    node.querySelector('.post-date').textContent = formatDate(post.date || post.createdAt);
+    node.querySelector('.post-text').textContent = post.text;
+
+    const mediaHost = node.querySelector('.post-media');
+    (post.media || []).forEach((m) => {
+      const mediaEl = document.createElement(m.type === 'video' ? 'video' : 'img');
+      mediaEl.src = m.dataUrl;
+      if (m.type === 'video') mediaEl.controls = true;
+      mediaHost.append(mediaEl);
+    });
+
+    const tagList = node.querySelector('.tag-list');
+    (post.tags || []).forEach((tag) => {
+      const span = document.createElement('span');
+      span.className = 'tag';
+      span.textContent = `#${tag}`;
+      tagList.append(span);
+    });
+
+    const likeBtn = node.querySelector('.like-btn');
+    likeBtn.classList.toggle('active', !!post.liked);
+    likeBtn.textContent = post.liked ? '👍 Liked' : '👍 Like';
+    likeBtn.addEventListener('click', () => {
+      post.liked = !post.liked;
+      save();
+      renderPosts();
+    });
+
+    node.querySelector('.delete-post').addEventListener('click', () => {
+      state.posts = state.posts.filter((p) => p.id !== post.id);
+      save();
+      renderPosts();
+    });
+
+    els.feedList.append(node);
+  });
+}
+
+els.profileName.addEventListener('input', () => {
+  state.profile.name = els.profileName.value.trim() || 'Mybook User';
+  renderAvatar();
+  save();
+  renderPosts();
+});
+
+els.profileBio.addEventListener('input', () => {
+  state.profile.bio = els.profileBio.value;
+  save();
+});
+
+els.profilePicInput.addEventListener('change', async (event) => {
+  const file = event.target.files?.[0];
+  if (!file) return;
+  const avatar = await fileToDataUrl(file);
+  state.profile.avatarDataUrl = avatar.dataUrl;
+  save();
+  renderAvatar();
+});
+
+els.postMedia.addEventListener('change', async (event) => {
+  const files = Array.from(event.target.files || []).slice(0, 8);
+  try {
+    state.pendingMedia = await Promise.all(files.map(fileToDataUrl));
+    renderMediaPreview();
+  } catch (error) {
+    state.pendingMedia = [];
+    els.postMedia.value = '';
+    renderMediaPreview();
+    alert(error.message || 'Could not process selected media.');
+  }
+});
+
+els.postForm.addEventListener('submit', (event) => {
+  event.preventDefault();
+  const text = els.postText.value.trim();
+  if (!text && state.pendingMedia.length === 0) return;
+
+  state.posts.push({
+    id: makeId(),
+    text,
+    date: els.postDate.value,
+    createdAt: new Date().toISOString(),
+    tags: els.postTags.value.split(',').map((tag) => tag.trim()).filter(Boolean),
+    media: state.pendingMedia,
+    liked: false,
+  });
+
+  els.postText.value = '';
+  els.postTags.value = '';
+  els.postDate.value = '';
+  els.postMedia.value = '';
+  state.pendingMedia = [];
+  renderMediaPreview();
+  const saved = save();
+  if (!saved) {
+    state.posts.pop();
+    alert('Post could not be saved. Try a smaller image or fewer media files.');
+    return;
+  }
+  renderPosts();
+});
+
+els.searchInput.addEventListener('input', renderPosts);
+els.sortSelect.addEventListener('change', renderPosts);
+
+els.clearBtn.addEventListener('click', () => {
+  if (!confirm('Delete all profile data and memories on this device?')) return;
+  localStorage.removeItem(STORAGE_KEY);
+  location.reload();
+});
+
+els.exportBtn.addEventListener('click', () => {
+  const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `mybook-backup-${new Date().toISOString().slice(0, 10)}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+});
+
+els.importFile.addEventListener('change', async (event) => {
+  const file = event.target.files?.[0];
+  if (!file) return;
+  const text = await file.text();
+  const imported = JSON.parse(text);
+  if (!imported || typeof imported !== 'object') return;
+  state.profile = { ...state.profile, ...(imported.profile || {}) };
+  state.posts = Array.isArray(imported.posts) ? imported.posts : [];
+  save();
+  load();
+  renderPosts();
+});
+
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' })
+    .then((registration) => registration.update())
+    .catch(() => {});
+}
+
+load();
+renderPosts();
