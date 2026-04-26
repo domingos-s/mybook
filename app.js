@@ -375,8 +375,25 @@ function renderAvatar() {
 }
 
 function formatDate(dateStr) {
-  const d = dateStr ? new Date(dateStr) : new Date();
+  const d = parsePostDate(dateStr) || new Date();
   return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', year: 'numeric' }).format(d);
+}
+
+function parsePostDate(dateStr) {
+  if (typeof dateStr !== 'string' || !dateStr.trim()) return null;
+  const localDateMatch = dateStr.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (localDateMatch) {
+    const [, year, month, day] = localDateMatch;
+    return new Date(Number(year), Number(month) - 1, Number(day));
+  }
+  const parsed = new Date(dateStr);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function getPostTimestamp(post) {
+  const dateCandidate = parsePostDate(post.date);
+  if (dateCandidate) return dateCandidate.getTime();
+  return new Date(post.createdAt).getTime();
 }
 
 function fileToDataUrl(file) {
@@ -463,8 +480,8 @@ function getVisiblePosts() {
     });
 
   return posts.sort((a, b) => {
-    const lhs = new Date(a.date || a.createdAt).getTime();
-    const rhs = new Date(b.date || b.createdAt).getTime();
+    const lhs = getPostTimestamp(a);
+    const rhs = getPostTimestamp(b);
     return order === 'oldest' ? lhs - rhs : rhs - lhs;
   });
 }
@@ -587,6 +604,7 @@ function renderPosts() {
     const postText = node.querySelector('.post-text');
     const postEditor = node.querySelector('.post-edit-editor');
     const postEditInput = node.querySelector('.post-edit-input');
+    const postEditDateInput = node.querySelector('.post-edit-date-input');
 
     const mediaHost = node.querySelector('.post-media');
     (post.media || []).forEach((m) => {
@@ -683,6 +701,7 @@ function renderPosts() {
 
     postEditBtn.addEventListener('click', () => {
       postEditInput.value = post.text || '';
+      postEditDateInput.value = post.date || '';
       postText.classList.add('hidden');
       postEditor.classList.remove('hidden');
       postEditInput.focus();
@@ -696,10 +715,12 @@ function renderPosts() {
 
     postEditSaveBtn.addEventListener('click', () => {
       const nextText = postEditInput.value.trim();
+      const nextDate = postEditDateInput.value;
       if (!nextText && (!Array.isArray(post.media) || post.media.length === 0)) return;
 
       const updated = updateState((draft) => {
         draft.postsById[post.id].text = nextText;
+        draft.postsById[post.id].date = nextDate;
         draft.postsById[post.id].updatedAt = new Date().toISOString();
       });
 
