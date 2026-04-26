@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#1877f2" />
+  <title>mybook</title>
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">mybook</div>
+    <div class="top-actions">
+      <button id="exportBtn" class="ghost">Export</button>
+      <label class="ghost import-label">Import<input id="importFile" type="file" accept="application/json" hidden /></label>
+    </div>
+  </header>
+
+  <main class="shell">
+    <aside class="profile-card">
+      <div class="cover"></div>
+      <div class="avatar" id="avatarInitials">D</div>
+      <input id="profileName" class="profile-name" value="Dom Santos" maxlength="40" />
+      <textarea id="profileBio" class="profile-bio" maxlength="140" placeholder="Add a short bio..."></textarea>
+      <div class="privacy-note">Private. Offline-first. Stored only on this device.</div>
+      <button id="clearBtn" class="danger">Clear all memories</button>
+    </aside>
+
+    <section class="feed">
+      <form id="postForm" class="composer">
+        <textarea id="postText" rows="3" maxlength="1000" placeholder="What's a memory you want to save?"></textarea>
+        <div class="composer-row">
+          <input id="postDate" type="date" />
+          <input id="postTags" type="text" placeholder="tags: family, trip, win" />
+          <button type="submit" class="primary">Post</button>
+        </div>
+      </form>
+
+      <div class="filters">
+        <input id="searchInput" type="search" placeholder="Search memories..." />
+        <select id="sortSelect">
+          <option value="newest">Newest first</option>
+          <option value="oldest">Oldest first</option>
+        </select>
+      </div>
+
+      <div id="emptyState" class="empty hidden">
+        <h2>No memories yet</h2>
+        <p>Add your first post above. It stays private on this device.</p>
+      </div>
+
+      <div id="feedList" class="feed-list"></div>
+    </section>
+  </main>
+
+  <template id="postTemplate">
+    <article class="post">
+      <div class="post-head">
+        <div class="mini-avatar"></div>
+        <div>
+          <div class="post-author"></div>
+          <div class="post-date"></div>
+        </div>
+        <button class="delete-post" title="Delete memory">×</button>
+      </div>
+      <p class="post-text"></p>
+      <div class="tag-list"></div>
+    </article>
+  </template>
+
+  <script src="app.js"></script>
+</body>
+</html>
