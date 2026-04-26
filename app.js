@@ -27,14 +27,6 @@ const state = {
   pendingMedia: [],
 };
 
-function makeId() {
-  if (globalThis.crypto && typeof globalThis.crypto.randomUUID === 'function') {
-    return globalThis.crypto.randomUUID();
-  }
-
-  return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-}
-
 function save() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
 }
@@ -198,7 +190,7 @@ els.postForm.addEventListener('submit', (event) => {
   if (!text && state.pendingMedia.length === 0) return;
 
   state.posts.push({
-    id: makeId(),
+    id: crypto.randomUUID(),
     text,
     date: els.postDate.value,
     createdAt: new Date().toISOString(),
