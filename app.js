@@ -498,8 +498,26 @@ function renderPosts() {
       node.querySelector('.comment-input').focus();
     });
 
-    node.querySelector('.share-btn').addEventListener('click', () => {
-      toast('Share placeholder: local-only for now.');
+    node.querySelector('.share-btn').addEventListener('click', async () => {
+      const choice = await showModalMessage({
+        title: 'Share memory',
+        message: 'Quick share includes text, app graphic, and uploaded media. Memory share exports JSON that another mybook can import.',
+        confirmText: 'Quick share',
+        cancelText: 'Memory share',
+        showCancel: true,
+      });
+
+      if (choice) {
+        try {
+          await quickSharePost(post);
+        } catch {
+          toast('Quick share failed on this device.', 'warn');
+        }
+        return;
+      }
+
+      downloadMemoryShare(post);
+      toast('Memory share JSON downloaded.');
     });
 
     const postMenuWrap = node.querySelector('.post-menu-wrap');
@@ -855,6 +873,105 @@ function normalizeImportPayload(raw) {
   return makeDefaultData();
 }
 
+function buildPostShareText(post) {
+  const tags = (post.tags || []).map((tag) => `#${tag}`).join(' ');
+  return [
+    `${state.data.profile.name} shared a memory from mybook`,
+    '',
+    post.text || '(no text)',
+    '',
+    tags,
+  ].filter(Boolean).join('\n');
+}
+
+function dataUrlToFile(dataUrl, fallbackName) {
+  const [meta, base64Payload = ''] = String(dataUrl || '').split(',');
+  const match = /data:([^;]+);base64/.exec(meta || '');
+  const mime = match ? match[1] : 'application/octet-stream';
+  const binary = atob(base64Payload);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+  return new File([bytes], fallbackName, { type: mime });
+}
+
+async function fetchAppGraphicFile() {
+  const response = await fetch('icon-192.svg');
+  const blob = await response.blob();
+  return new File([blob], 'mybook-icon.svg', { type: blob.type || 'image/svg+xml' });
+}
+
+async function quickSharePost(post) {
+  const shareText = buildPostShareText(post);
+  const files = [];
+
+  try {
+    files.push(await fetchAppGraphicFile());
+  } catch {
+    // continue without app icon
+  }
+
+  (post.media || []).forEach((mediaItem, index) => {
+    const fallbackName = mediaItem.name || `memory-media-${index + 1}.${mediaItem.type === 'video' ? 'mp4' : 'jpg'}`;
+    files.push(dataUrlToFile(mediaItem.dataUrl, fallbackName));
+  });
+
+  const canShareFiles = files.length > 0 && navigator.canShare && navigator.canShare({ files });
+  const payload = {
+    title: 'mybook quick share',
+    text: shareText,
+    ...(canShareFiles ? { files } : {}),
+  };
+
+  if (navigator.share) {
+    await navigator.share(payload);
+    toast('Quick share opened.');
+    return;
+  }
+
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(shareText);
+    toast('Quick share copied as text (share sheet unavailable).', 'warn');
+    return;
+  }
+
+  toast('Sharing is not available on this browser.', 'warn');
+}
+
+function buildMemorySharePayload(post) {
+  return {
+    kind: 'mybook-memory-share',
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    post: {
+      ...normalizePost(post),
+      id: post.id,
+    },
+  };
+}
+
+function downloadMemoryShare(post) {
+  const payload = buildMemorySharePayload(post);
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `mybook-memory-${new Date().toISOString().slice(0, 10)}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function importMemoryShare(raw) {
+  const incomingPost = raw && raw.post ? normalizePost(raw.post) : null;
+  if (!incomingPost || (!incomingPost.text && incomingPost.media.length === 0)) return false;
+
+  const incomingId = state.data.postsById[incomingPost.id] ? crypto.randomUUID() : incomingPost.id;
+  const postToInsert = { ...incomingPost, id: incomingId };
+  return updateState((draft) => {
+    draft.postsById[postToInsert.id] = postToInsert;
+    draft.postOrder.unshift(postToInsert.id);
+  });
+}
+
 els.importFile.addEventListener('change', async (event) => {
   const file = event.target.files?.[0];
   if (!file) return;
@@ -862,6 +979,17 @@ els.importFile.addEventListener('change', async (event) => {
   try {
     const text = await file.text();
     const parsed = JSON.parse(text);
+
+    if (parsed && parsed.kind === 'mybook-memory-share') {
+      const merged = importMemoryShare(parsed);
+      if (!merged) {
+        toast('Memory share import failed: invalid memory payload.', 'error');
+      } else {
+        toast('Memory imported into your feed.');
+      }
+      return;
+    }
+
     const imported = normalizeImportPayload(parsed);
 
     state.data = imported;
