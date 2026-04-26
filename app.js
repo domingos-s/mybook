@@ -1,5 +1,8 @@
 const STORAGE_KEY_V3 = 'mybook_v3';
 const STORAGE_KEY_V2 = 'mybook_v2';
+const MAX_IMAGE_DIMENSION = 1600;
+const IMAGE_OUTPUT_QUALITY = 0.82;
+const MAX_VIDEO_FILE_BYTES = 12 * 1024 * 1024;
 
 const els = {
   profileName: document.getElementById('profileName'),
@@ -346,10 +349,57 @@ function formatDate(dateStr) {
 }
 
 function fileToDataUrl(file) {
+  if (file.type.startsWith('image/')) {
+    return optimizeImageFile(file);
+  }
+
+  if (file.type.startsWith('video/')) {
+    if (file.size > MAX_VIDEO_FILE_BYTES) {
+      return Promise.reject(new Error('video-too-large'));
+    }
+    return readRawFileDataUrl(file, 'video');
+  }
+
+  return Promise.reject(new Error('unsupported-file-type'));
+}
+
+function readRawFileDataUrl(file, typeOverride = '') {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
-    reader.onload = () => resolve({ dataUrl: reader.result, type: file.type.startsWith('video/') ? 'video' : 'image', name: file.name });
+    reader.onload = () => resolve({ dataUrl: reader.result, type: typeOverride || (file.type.startsWith('video/') ? 'video' : 'image'), name: file.name });
     reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+function optimizeImageFile(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('image-read-failed'));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error('image-decode-failed'));
+      img.onload = () => {
+        const scale = Math.min(1, MAX_IMAGE_DIMENSION / Math.max(img.width, img.height));
+        const width = Math.max(1, Math.round(img.width * scale));
+        const height = Math.max(1, Math.round(img.height * scale));
+
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          reject(new Error('canvas-unavailable'));
+          return;
+        }
+
+        ctx.drawImage(img, 0, 0, width, height);
+        const dataUrl = canvas.toDataURL('image/jpeg', IMAGE_OUTPUT_QUALITY);
+        resolve({ dataUrl, type: 'image', name: file.name });
+      };
+      img.src = reader.result;
+    };
     reader.readAsDataURL(file);
   });
 }
@@ -614,16 +664,42 @@ els.profileBio.addEventListener('input', () => {
 els.profilePicInput.addEventListener('change', async (event) => {
   const file = event.target.files?.[0];
   if (!file) return;
-  const avatar = await fileToDataUrl(file);
-  updateState((draft) => {
-    draft.profile.avatarDataUrl = avatar.dataUrl;
-  });
+  try {
+    const avatar = await fileToDataUrl(file);
+    const updated = updateState((draft) => {
+      draft.profile.avatarDataUrl = avatar.dataUrl;
+    });
+
+    if (!updated) {
+      toast('Try a smaller image for your profile photo.', 'warn');
+    }
+  } catch (error) {
+    const message = error && error.message === 'video-too-large'
+      ? 'Videos are not supported for profile photos.'
+      : 'Could not process that image. Try another file.';
+    toast(message, 'error');
+  } finally {
+    event.target.value = '';
+  }
 });
 
 els.postMedia.addEventListener('change', async (event) => {
   const files = Array.from(event.target.files || []).slice(0, 8);
-  state.pendingMedia = await Promise.all(files.map(fileToDataUrl));
-  renderMediaPreview();
+  try {
+    const processed = await Promise.all(files.map(fileToDataUrl));
+    state.pendingMedia = processed;
+    renderMediaPreview();
+  } catch (error) {
+    state.pendingMedia = [];
+    renderMediaPreview();
+    if (error && error.message === 'video-too-large') {
+      toast('One of your videos is too large. Keep each video under 12 MB.', 'error');
+    } else {
+      toast('Could not process one or more files. Try smaller photos/videos.', 'error');
+    }
+  } finally {
+    event.target.value = '';
+  }
 });
 
 els.postForm.addEventListener('submit', (event) => {
@@ -642,10 +718,15 @@ els.postForm.addEventListener('submit', (event) => {
     comments: [],
   });
 
-  updateState((draft) => {
+  const updated = updateState((draft) => {
     draft.postsById[post.id] = post;
     draft.postOrder.unshift(post.id);
   });
+
+  if (!updated) {
+    toast('Try fewer or smaller files, then post again.', 'warn');
+    return;
+  }
 
   els.postText.value = '';
   els.postTags.value = '';
