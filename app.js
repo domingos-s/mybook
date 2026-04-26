@@ -1,8 +1,14 @@
 const STORAGE_KEY_V3 = 'mybook_v3';
 const STORAGE_KEY_V2 = 'mybook_v2';
+const MEDIA_DB_NAME = 'mybook_media_v1';
+const MEDIA_DB_VERSION = 1;
+const MEDIA_STORE = 'media';
 const MAX_IMAGE_DIMENSION = 1600;
 const IMAGE_OUTPUT_QUALITY = 0.82;
 const MAX_VIDEO_FILE_BYTES = 12 * 1024 * 1024;
+const MAX_MEDIA_FILE_BYTES = 12 * 1024 * 1024;
+const MAX_TOTAL_MEDIA_BYTES = 250 * 1024 * 1024;
+const STORAGE_HEADROOM_BYTES = 8 * 1024 * 1024;
 const PROTOCOL_VERSION = 1;
 const DEFAULT_ICE_SERVERS = [{ urls: 'stun:stun.l.google.com:19302' }];
 
@@ -73,6 +79,8 @@ const els = {
 const state = {
   data: makeDefaultData(),
   pendingMedia: [],
+  mediaDb: null,
+  activeObjectUrls: new Set(),
   selectedPostPeople: [],
   activeFilters: { tags: [], peopleIds: [] },
   pendingPersonAvatarDataUrl: '',
@@ -109,6 +117,154 @@ function makeDefaultData() {
 
 function deepCopy(value) {
   return JSON.parse(JSON.stringify(value));
+}
+
+function openMediaDb() {
+  if (!('indexedDB' in window)) return Promise.reject(new Error('indexeddb-unavailable'));
+  if (state.mediaDb) return Promise.resolve(state.mediaDb);
+
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(MEDIA_DB_NAME, MEDIA_DB_VERSION);
+    request.onerror = () => reject(request.error || new Error('indexeddb-open-failed'));
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains(MEDIA_STORE)) {
+        db.createObjectStore(MEDIA_STORE, { keyPath: 'mediaId' });
+      }
+    };
+    request.onsuccess = () => {
+      state.mediaDb = request.result;
+      resolve(state.mediaDb);
+    };
+  });
+}
+
+function runMediaStore(mode, worker) {
+  return openMediaDb().then((db) => new Promise((resolve, reject) => {
+    const tx = db.transaction(MEDIA_STORE, mode);
+    const store = tx.objectStore(MEDIA_STORE);
+    let settled = false;
+    const finishResolve = (value) => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
+    const finishReject = (error) => {
+      if (settled) return;
+      settled = true;
+      reject(error);
+    };
+    const result = worker(store, tx);
+    if (result && typeof result.then === 'function') {
+      result.then(finishResolve).catch(finishReject);
+    } else {
+      tx.oncomplete = () => finishResolve(result);
+    }
+    tx.onerror = () => finishReject(tx.error || new Error('indexeddb-transaction-failed'));
+    tx.onabort = () => finishReject(tx.error || new Error('indexeddb-transaction-aborted'));
+  }));
+}
+
+async function getMediaUsageBytes() {
+  return runMediaStore('readonly', (store) => new Promise((resolve, reject) => {
+    let total = 0;
+    const request = store.openCursor();
+    request.onerror = () => reject(request.error || new Error('indexeddb-cursor-failed'));
+    request.onsuccess = () => {
+      const cursor = request.result;
+      if (!cursor) {
+        resolve(total);
+        return;
+      }
+      total += Number(cursor.value?.size || cursor.value?.blob?.size || 0);
+      cursor.continue();
+    };
+  }));
+}
+
+async function warnIfStorageNearLimit(incomingBytes = 0) {
+  if (!navigator.storage?.estimate) return;
+  try {
+    const estimate = await navigator.storage.estimate();
+    const used = Number(estimate.usage || 0);
+    const quota = Number(estimate.quota || 0);
+    if (!quota) return;
+    const projected = used + incomingBytes + STORAGE_HEADROOM_BYTES;
+    if (projected >= quota) {
+      toast('Storage is nearly full. Delete old memories or media before adding more.', 'warn');
+    }
+  } catch {
+    // ignore estimate failures
+  }
+}
+
+async function assertMediaWriteCapacity(incomingBytes = 0) {
+  if (incomingBytes > MAX_MEDIA_FILE_BYTES) throw new Error('media-too-large');
+  const usedMediaBytes = await getMediaUsageBytes();
+  if (usedMediaBytes + incomingBytes > MAX_TOTAL_MEDIA_BYTES) throw new Error('media-budget-exceeded');
+  await warnIfStorageNearLimit(incomingBytes);
+}
+
+async function putMediaBlob({ mediaId, blob, type, name }) {
+  const resolvedBlob = blob instanceof Blob ? blob : null;
+  if (!resolvedBlob) throw new Error('invalid-media-blob');
+  await assertMediaWriteCapacity(resolvedBlob.size);
+  const nextMediaId = typeof mediaId === 'string' && mediaId ? mediaId : crypto.randomUUID();
+  const entry = {
+    mediaId: nextMediaId,
+    blob: resolvedBlob,
+    type: type === 'video' ? 'video' : 'image',
+    name: typeof name === 'string' && name ? name : (type === 'video' ? 'video' : 'image'),
+    size: resolvedBlob.size,
+    createdAt: new Date().toISOString(),
+  };
+  await runMediaStore('readwrite', (store) => {
+    store.put(entry);
+  });
+  return {
+    mediaId: entry.mediaId,
+    type: entry.type,
+    name: entry.name,
+  };
+}
+
+async function getMediaBlob(mediaId) {
+  if (typeof mediaId !== 'string' || !mediaId) return null;
+  return runMediaStore('readonly', (store) => new Promise((resolve, reject) => {
+    const request = store.get(mediaId);
+    request.onerror = () => reject(request.error || new Error('indexeddb-get-failed'));
+    request.onsuccess = () => resolve(request.result || null);
+  }));
+}
+
+function revokeAllObjectUrls() {
+  state.activeObjectUrls.forEach((url) => URL.revokeObjectURL(url));
+  state.activeObjectUrls.clear();
+}
+
+async function persistPostMediaRefs(mediaItems = []) {
+  const refs = [];
+  for (const item of mediaItems) {
+    if (!item || (item.type !== 'image' && item.type !== 'video')) continue;
+    if (item.mediaId) {
+      refs.push({
+        mediaId: item.mediaId,
+        type: item.type,
+        name: item.name || (item.type === 'video' ? 'video' : 'image'),
+      });
+      continue;
+    }
+    if (typeof item.dataUrl === 'string' && item.dataUrl.startsWith('data:')) {
+      const blob = dataUrlToBlob(item.dataUrl);
+      const ref = await putMediaBlob({
+        blob,
+        type: item.type,
+        name: item.name,
+      });
+      refs.push(ref);
+    }
+  }
+  return refs;
 }
 
 function openModalOverlay(modalEl) {
@@ -305,6 +461,30 @@ function normalizeComment(comment = {}) {
 
 function normalizePost(post = {}) {
   const importedFrom = post.importedFrom && typeof post.importedFrom === 'object' ? post.importedFrom : null;
+  const normalizedMedia = Array.isArray(post.media)
+    ? post.media
+      .map((m) => {
+        if (!m || (m.type !== 'image' && m.type !== 'video')) return null;
+        if (typeof m.mediaId === 'string' && m.mediaId) {
+          return {
+            mediaId: m.mediaId,
+            type: m.type,
+            name: typeof m.name === 'string' ? m.name : (m.type === 'video' ? 'video' : 'image'),
+          };
+        }
+        if (typeof m.dataUrl === 'string' && m.dataUrl.startsWith('data:')) {
+          return {
+            mediaId: '',
+            dataUrl: m.dataUrl,
+            type: m.type,
+            name: typeof m.name === 'string' ? m.name : (m.type === 'video' ? 'video' : 'image'),
+          };
+        }
+        return null;
+      })
+      .filter(Boolean)
+    : [];
+
   return {
     id: typeof post.id === 'string' ? post.id : crypto.randomUUID(),
     text: typeof post.text === 'string' ? post.text : '',
@@ -313,13 +493,7 @@ function normalizePost(post = {}) {
     updatedAt: typeof post.updatedAt === 'string' ? post.updatedAt : undefined,
     tags: Array.isArray(post.tags) ? post.tags.filter((tag) => typeof tag === 'string').map((tag) => tag.trim()).filter(Boolean) : [],
     peopleIds: Array.isArray(post.peopleIds) ? post.peopleIds.filter((id) => typeof id === 'string') : [],
-    media: Array.isArray(post.media)
-      ? post.media.filter((m) => m && typeof m.dataUrl === 'string' && (m.type === 'image' || m.type === 'video')).map((m) => ({
-        dataUrl: m.dataUrl,
-        type: m.type,
-        name: typeof m.name === 'string' ? m.name : (m.type === 'video' ? 'video' : 'image'),
-      }))
-      : [],
+    media: normalizedMedia,
     liked: Boolean(post.liked),
     comments: Array.isArray(post.comments) ? post.comments.map(normalizeComment).filter((c) => c.text.trim()) : [],
     importedFrom: importedFrom
@@ -426,6 +600,32 @@ async function load() {
   renderConnectionStatus(state.data.connections.enabled ? 'Connection feature is enabled.' : 'Connection disabled.');
 }
 
+async function migrateLegacyMediaToIndexedDb() {
+  const postIds = state.data.postOrder.filter((id) => state.data.postsById[id]);
+  for (const postId of postIds) {
+    const post = state.data.postsById[postId];
+    const needsMigration = (post.media || []).some((item) => item && typeof item.dataUrl === 'string' && item.dataUrl.startsWith('data:'));
+    if (!needsMigration) continue;
+
+    try {
+      const refs = await persistPostMediaRefs(post.media || []);
+      updateState((draft) => {
+        if (!draft.postsById[postId]) return;
+        draft.postsById[postId].media = refs;
+        draft.postsById[postId].updatedAt = new Date().toISOString();
+      }, { render: false });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    } catch (error) {
+      if (error && (error.message === 'media-budget-exceeded' || error.message === 'media-too-large')) {
+        toast('Some older media could not be migrated due to storage limits.', 'warn');
+        return;
+      }
+      toast('Some older media could not be migrated on this device.', 'warn');
+      return;
+    }
+  }
+}
+
 function initials(name) {
   return name
     .split(/\s+/)
@@ -467,16 +667,16 @@ function getPostTimestamp(post) {
   return new Date(post.createdAt).getTime();
 }
 
-function fileToDataUrl(file) {
+function processMediaFile(file) {
   if (file.type.startsWith('image/')) {
-    return optimizeImageFile(file);
+    return optimizeImageBlob(file);
   }
 
   if (file.type.startsWith('video/')) {
     if (file.size > MAX_VIDEO_FILE_BYTES) {
       return Promise.reject(new Error('video-too-large'));
     }
-    return readRawFileDataUrl(file, 'video');
+    return Promise.resolve({ blob: file, type: 'video', name: file.name });
   }
 
   return Promise.reject(new Error('unsupported-file-type'));
@@ -521,6 +721,48 @@ function optimizeImageFile(file) {
     };
     reader.readAsDataURL(file);
   });
+}
+
+function optimizeImageBlob(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('image-read-failed'));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error('image-decode-failed'));
+      img.onload = () => {
+        const scale = Math.min(1, MAX_IMAGE_DIMENSION / Math.max(img.width, img.height));
+        const width = Math.max(1, Math.round(img.width * scale));
+        const height = Math.max(1, Math.round(img.height * scale));
+
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          reject(new Error('canvas-unavailable'));
+          return;
+        }
+
+        ctx.drawImage(img, 0, 0, width, height);
+        canvas.toBlob((blob) => {
+          if (!blob) {
+            reject(new Error('image-encode-failed'));
+            return;
+          }
+          resolve({ blob, type: 'image', name: file.name });
+        }, 'image/jpeg', IMAGE_OUTPUT_QUALITY);
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+function fileToDataUrl(file) {
+  if (!file.type.startsWith('image/')) return Promise.reject(new Error('video-too-large'));
+  return optimizeImageFile(file);
 }
 
 function renderMediaPreview() {
@@ -650,6 +892,7 @@ function closeAccountMenu() {
 
 function renderPosts() {
   const filtered = getVisiblePosts();
+  revokeAllObjectUrls();
 
   els.feedList.innerHTML = '';
   els.emptyState.classList.toggle('hidden', filtered.length > 0);
@@ -687,12 +930,7 @@ function renderPosts() {
     const postEditDateInput = node.querySelector('.post-edit-date-input');
 
     const mediaHost = node.querySelector('.post-media');
-    (post.media || []).forEach((m) => {
-      const mediaEl = document.createElement(m.type === 'video' ? 'video' : 'img');
-      mediaEl.src = m.dataUrl;
-      if (m.type === 'video') mediaEl.controls = true;
-      mediaHost.append(mediaEl);
-    });
+    void renderPostMedia(post, mediaHost);
 
     const tagList = node.querySelector('.tag-list');
     (post.tags || []).forEach((tag) => {
@@ -894,6 +1132,26 @@ function renderPosts() {
   });
 }
 
+async function renderPostMedia(post, mediaHost) {
+  const mediaItems = Array.isArray(post.media) ? post.media : [];
+  for (const mediaRef of mediaItems) {
+    const mediaEl = document.createElement(mediaRef.type === 'video' ? 'video' : 'img');
+    if (mediaRef?.mediaId) {
+      const stored = await getMediaBlob(mediaRef.mediaId);
+      if (!stored?.blob) continue;
+      const objectUrl = URL.createObjectURL(stored.blob);
+      state.activeObjectUrls.add(objectUrl);
+      mediaEl.src = objectUrl;
+    } else if (mediaRef?.dataUrl) {
+      mediaEl.src = mediaRef.dataUrl;
+    } else {
+      continue;
+    }
+    if (mediaRef.type === 'video') mediaEl.controls = true;
+    mediaHost.append(mediaEl);
+  }
+}
+
 els.profileName.addEventListener('input', () => {
   const entered = els.profileName.value.trim() || 'Mybook User';
   updateState((draft) => {
@@ -932,7 +1190,7 @@ els.profilePicInput.addEventListener('change', async (event) => {
 els.postMedia.addEventListener('change', async (event) => {
   const files = Array.from(event.target.files || []).slice(0, 8);
   try {
-    const processed = await Promise.all(files.map(fileToDataUrl));
+    const processed = await Promise.all(files.map(processMediaFile));
     state.pendingMedia = processed;
     renderMediaPreview();
   } catch (error) {
@@ -948,10 +1206,24 @@ els.postMedia.addEventListener('change', async (event) => {
   }
 });
 
-els.postForm.addEventListener('submit', (event) => {
+els.postForm.addEventListener('submit', async (event) => {
   event.preventDefault();
   const text = els.postText.value.trim();
   if (!text && state.pendingMedia.length === 0) return;
+
+  let mediaRefs = [];
+  try {
+    mediaRefs = await Promise.all(state.pendingMedia.map((item) => putMediaBlob(item)));
+  } catch (error) {
+    if (error && error.message === 'media-budget-exceeded') {
+      toast('Media storage limit reached. Remove older memories with media first.', 'warn');
+    } else if (error && error.message === 'media-too-large') {
+      toast('One file is too large. Keep each media file under 12 MB.', 'warn');
+    } else {
+      toast('Could not store media on this device. Try smaller files.', 'error');
+    }
+    return;
+  }
 
   const post = normalizePost({
     id: crypto.randomUUID(),
@@ -960,7 +1232,7 @@ els.postForm.addEventListener('submit', (event) => {
     createdAt: new Date().toISOString(),
     tags: els.postTags.value.split(',').map((tag) => tag.trim()).filter(Boolean),
     peopleIds: state.selectedPostPeople,
-    media: state.pendingMedia,
+    media: mediaRefs,
     liked: false,
     comments: [],
   });
@@ -1160,8 +1432,10 @@ els.settingsClearBtn.addEventListener('click', () => {
       showCancel: true,
     });
     if (!confirmed) return;
+    revokeAllObjectUrls();
     localStorage.removeItem(STORAGE_KEY_V3);
     localStorage.removeItem(STORAGE_KEY_V2);
+    if ('indexedDB' in window) indexedDB.deleteDatabase(MEDIA_DB_NAME);
     location.reload();
   })();
 });
@@ -1486,7 +1760,7 @@ function postContentHash(post = {}) {
     tags: Array.isArray(post.tags) ? post.tags : [],
     peopleIds: Array.isArray(post.peopleIds) ? post.peopleIds : [],
     media: Array.isArray(post.media) ? post.media.map((item) => ({
-      dataUrl: item.dataUrl,
+      mediaId: item.mediaId || '',
       type: item.type,
       name: item.name,
     })) : [],
@@ -1652,24 +1926,36 @@ function buildPostShareText(post) {
   ].filter(Boolean).join('\n');
 }
 
-function dataUrlToFile(dataUrl, fallbackName) {
+function dataUrlToBlob(dataUrl) {
   const [meta, base64Payload = ''] = String(dataUrl || '').split(',');
   const match = /data:([^;]+);base64/.exec(meta || '');
   const mime = match ? match[1] : 'application/octet-stream';
   const binary = atob(base64Payload);
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
-  return new File([bytes], fallbackName, { type: mime });
+  return new Blob([bytes], { type: mime });
+}
+
+async function resolveMediaFile(mediaItem, index) {
+  const fallbackName = mediaItem.name || `memory-media-${index + 1}.${mediaItem.type === 'video' ? 'mp4' : 'jpg'}`;
+  if (mediaItem.mediaId) {
+    const stored = await getMediaBlob(mediaItem.mediaId);
+    if (stored?.blob) return new File([stored.blob], fallbackName, { type: stored.blob.type || (mediaItem.type === 'video' ? 'video/mp4' : 'image/jpeg') });
+  }
+  if (mediaItem.dataUrl) {
+    return new File([dataUrlToBlob(mediaItem.dataUrl)], fallbackName, { type: mediaItem.type === 'video' ? 'video/mp4' : 'image/jpeg' });
+  }
+  return null;
 }
 
 async function quickSharePost(post) {
   const shareText = buildPostShareText(post);
   const files = [];
 
-  (post.media || []).forEach((mediaItem, index) => {
-    const fallbackName = mediaItem.name || `memory-media-${index + 1}.${mediaItem.type === 'video' ? 'mp4' : 'jpg'}`;
-    files.push(dataUrlToFile(mediaItem.dataUrl, fallbackName));
-  });
+  for (const [index, mediaItem] of (post.media || []).entries()) {
+    const file = await resolveMediaFile(mediaItem, index);
+    if (file) files.push(file);
+  }
 
   const canShareFiles = files.length > 0 && navigator.canShare && navigator.canShare({ files });
   const payload = {
@@ -1763,14 +2049,51 @@ async function signMemoryShareContent(sender, post) {
   };
 }
 
+function blobToDataUrl(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('blob-read-failed'));
+    reader.onload = () => resolve(reader.result);
+    reader.readAsDataURL(blob);
+  });
+}
+
+async function materializePostMediaForExport(post) {
+  const media = [];
+  for (const item of (post.media || [])) {
+    if (item.dataUrl) {
+      media.push({
+        dataUrl: item.dataUrl,
+        type: item.type,
+        name: item.name,
+      });
+      continue;
+    }
+    if (!item.mediaId) continue;
+    const stored = await getMediaBlob(item.mediaId);
+    if (!stored?.blob) continue;
+    const dataUrl = await blobToDataUrl(stored.blob);
+    media.push({
+      dataUrl,
+      type: item.type,
+      name: item.name,
+    });
+  }
+  return media;
+}
+
 async function buildMemorySharePayload(post) {
   const normalizedPost = normalizePost(post);
+  const postForExport = {
+    ...normalizedPost,
+    media: await materializePostMediaForExport(normalizedPost),
+  };
   const sender = {
     senderId: state.data.connections.peerId,
     displayName: state.data.connections.displayName || state.data.profile.name || 'Mybook User',
     exportedAt: new Date().toISOString(),
   };
-  const integrity = await signMemoryShareContent(sender, normalizedPost);
+  const integrity = await signMemoryShareContent(sender, postForExport);
   return {
     kind: 'mybook-memory-share',
     version: 1,
@@ -1780,7 +2103,7 @@ async function buildMemorySharePayload(post) {
     signature: integrity.signature,
     signerPublicKey: integrity.publicKeyJwk,
     post: {
-      ...normalizedPost,
+      ...postForExport,
       id: post.id,
     },
   };
@@ -1902,10 +2225,17 @@ async function importMemoryShare(raw, options = {}) {
 
   const { onConflict = 'generate' } = options;
   if (state.data.postsById[incomingPost.id] && onConflict === 'skip') return false;
+  let mediaRefs = [];
+  try {
+    mediaRefs = await persistPostMediaRefs(incomingPost.media || []);
+  } catch {
+    return false;
+  }
   const incomingId = state.data.postsById[incomingPost.id] ? crypto.randomUUID() : incomingPost.id;
   const postToInsert = {
     ...incomingPost,
     id: incomingId,
+    media: mediaRefs,
     importedFrom: {
       senderId: sender.senderId || '',
       displayName: sender.displayName || 'Unknown sender',
@@ -1961,6 +2291,7 @@ async function handleImportFile(event, mode = 'auto') {
 
     if (mergeChoice === true) {
       mergeImportedData(imported);
+      await migrateLegacyMediaToIndexedDb();
       toast('Backup merged into current data.');
       return;
     }
@@ -1979,6 +2310,7 @@ async function handleImportFile(event, mode = 'auto') {
     }
 
     applyImportedData(imported);
+    await migrateLegacyMediaToIndexedDb();
     toast('Backup imported by replacing local data.');
   } catch {
     toast('Import failed: invalid JSON file.', 'error');
@@ -2001,7 +2333,13 @@ if ('serviceWorker' in navigator) {
 }
 
 async function init() {
+  try {
+    await openMediaDb();
+  } catch {
+    toast('IndexedDB is unavailable, so media features may be limited on this browser.', 'warn');
+  }
   await load();
+  await migrateLegacyMediaToIndexedDb();
   renderAvatar();
   renderPeopleList();
   renderPostPeopleMenu();
