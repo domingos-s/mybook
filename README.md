@@ -12,7 +12,8 @@ A private, on-device social memory feed with a Facebook-like aesthetic.
 - Data stored locally in `localStorage`
 - Export/import JSON backup
 - Offline support through a service worker
-- Installable PWA manifest
+- In-app "Update app" button to clear cached app assets and refresh to latest files
+- Installable PWA manifest with Android-friendly app icons (including maskable variants)
 
 ## Run locally
 Because service workers require a local server, run:
