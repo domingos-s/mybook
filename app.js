@@ -48,6 +48,7 @@ const els = {
   settingsClearBtn: document.getElementById('settingsClearBtn'),
   updateAppBtn: document.getElementById('updateAppBtn'),
   exportBtn: document.getElementById('exportBtn'),
+  importMemoryFile: document.getElementById('importMemoryFile'),
   importFile: document.getElementById('importFile'),
   accountMenuBtn: document.getElementById('accountMenuBtn'),
   accountMenu: document.getElementById('accountMenu'),
@@ -1198,15 +1199,21 @@ function importMemoryShare(raw) {
   });
 }
 
-els.importFile.addEventListener('change', async (event) => {
+async function handleImportFile(event, mode = 'auto') {
   const file = event.target.files?.[0];
   if (!file) return;
 
   try {
     const text = await file.text();
     const parsed = JSON.parse(text);
+    const isMemoryShare = parsed && parsed.kind === 'mybook-memory-share';
 
-    if (parsed && parsed.kind === 'mybook-memory-share') {
+    if (mode === 'memory' && !isMemoryShare) {
+      toast('Import memory failed: this file is not a memory share export.', 'error');
+      return;
+    }
+
+    if (isMemoryShare) {
       const merged = importMemoryShare(parsed);
       if (!merged) {
         toast('Memory share import failed: invalid memory payload.', 'error');
@@ -1237,6 +1244,14 @@ els.importFile.addEventListener('change', async (event) => {
     event.target.value = '';
     closeAccountMenu();
   }
+}
+
+els.importMemoryFile.addEventListener('change', (event) => {
+  handleImportFile(event, 'memory');
+});
+
+els.importFile.addEventListener('change', (event) => {
+  handleImportFile(event, 'auto');
 });
 
 if ('serviceWorker' in navigator) {
