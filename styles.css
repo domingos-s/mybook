@@ -203,6 +203,7 @@ textarea:focus-visible, input:focus-visible, select:focus-visible {
 .post { padding: var(--space-3); }
 .post-head { display: flex; align-items: center; gap: var(--space-2); }
 .post-author { font-weight: 800; }
+.post-imported-from { font-weight: 500; font-size: 12px; color: var(--text-2); }
 .post-date { font-size: 13px; color: var(--text-2); }
 .post-menu-wrap { margin-left: auto; }
 .action-btn {
