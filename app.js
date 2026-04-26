@@ -1435,6 +1435,183 @@ function normalizeImportPayload(raw) {
   return makeDefaultData();
 }
 
+
+function stableStringify(value) {
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => stableStringify(item)).join(',')}]`;
+  }
+
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableStringify(value[key])}`).join(',')}}`;
+  }
+
+  return JSON.stringify(value);
+}
+
+function postContentHash(post = {}) {
+  return stableStringify({
+    text: post.text || '',
+    date: post.date || '',
+    createdAt: post.createdAt || '',
+    updatedAt: post.updatedAt || '',
+    tags: Array.isArray(post.tags) ? post.tags : [],
+    peopleIds: Array.isArray(post.peopleIds) ? post.peopleIds : [],
+    media: Array.isArray(post.media) ? post.media.map((item) => ({
+      dataUrl: item.dataUrl,
+      type: item.type,
+      name: item.name,
+    })) : [],
+    comments: Array.isArray(post.comments) ? post.comments.map((comment) => ({
+      text: comment.text || '',
+      createdAt: comment.createdAt || '',
+      updatedAt: comment.updatedAt || '',
+    })) : [],
+  });
+}
+
+function personContentHash(person = {}) {
+  return stableStringify({
+    name: person.name || '',
+    relationship: person.relationship || '',
+    avatarDataUrl: person.avatarDataUrl || '',
+  });
+}
+
+function summarizeImportDiff(importedData, currentData) {
+  const incomingPosts = importedData.postOrder
+    .map((id) => importedData.postsById[id])
+    .filter(Boolean);
+  const existingPostHashes = new Set(Object.values(currentData.postsById).map((post) => postContentHash(post)));
+  let postsToAdd = 0;
+  let postsToUpdate = 0;
+
+  incomingPosts.forEach((post) => {
+    const currentPost = currentData.postsById[post.id];
+    if (currentPost) {
+      if (postContentHash(currentPost) !== postContentHash(post)) postsToUpdate += 1;
+      return;
+    }
+
+    if (!existingPostHashes.has(postContentHash(post))) postsToAdd += 1;
+  });
+
+  const existingPeopleById = new Set(currentData.people.map((person) => person.id));
+  const existingPeopleHashes = new Set(currentData.people.map((person) => personContentHash(person)));
+  let peopleToAdd = 0;
+  importedData.people.forEach((person) => {
+    if (!existingPeopleById.has(person.id) && !existingPeopleHashes.has(personContentHash(person))) {
+      peopleToAdd += 1;
+    }
+  });
+
+  const profileConflicts = [];
+  if ((importedData.profile.name || '').trim() && importedData.profile.name !== currentData.profile.name) profileConflicts.push('name');
+  if ((importedData.profile.bio || '').trim() && importedData.profile.bio !== currentData.profile.bio) profileConflicts.push('bio');
+  if (importedData.profile.avatarDataUrl && importedData.profile.avatarDataUrl !== currentData.profile.avatarDataUrl) profileConflicts.push('avatar');
+
+  return {
+    postsToAdd,
+    postsToUpdate,
+    peopleToAdd,
+    profileConflicts,
+  };
+}
+
+function mergePostsById(currentPostsById, importedPostsById) {
+  const mergedPostsById = { ...currentPostsById };
+  const existingHashToId = new Map();
+  Object.values(mergedPostsById).forEach((post) => {
+    existingHashToId.set(postContentHash(post), post.id);
+  });
+
+  const addedPostIds = [];
+  Object.keys(importedPostsById).forEach((postId) => {
+    const incomingPost = normalizePost(importedPostsById[postId]);
+    const existingPost = mergedPostsById[incomingPost.id];
+    if (existingPost) {
+      if (postContentHash(existingPost) !== postContentHash(incomingPost)) mergedPostsById[incomingPost.id] = incomingPost;
+      return;
+    }
+
+    const hash = postContentHash(incomingPost);
+    if (existingHashToId.has(hash)) return;
+
+    mergedPostsById[incomingPost.id] = incomingPost;
+    existingHashToId.set(hash, incomingPost.id);
+    addedPostIds.push(incomingPost.id);
+  });
+
+  return { mergedPostsById, addedPostIds };
+}
+
+function mergePostOrder(currentOrder, importedOrder, postsById, addedPostIds = []) {
+  const seen = new Set();
+  const mergedOrder = [];
+
+  [...importedOrder.filter((id) => addedPostIds.includes(id)), ...currentOrder, ...importedOrder].forEach((id) => {
+    if (typeof id !== 'string' || !postsById[id] || seen.has(id)) return;
+    seen.add(id);
+    mergedOrder.push(id);
+  });
+
+  Object.keys(postsById).forEach((id) => {
+    if (!seen.has(id)) mergedOrder.push(id);
+  });
+
+  return mergedOrder;
+}
+
+function mergePeople(currentPeople, importedPeople) {
+  const mergedPeople = currentPeople.map((person) => ({ ...person }));
+  const existingById = new Set(mergedPeople.map((person) => person.id));
+  const existingHashes = new Set(mergedPeople.map((person) => personContentHash(person)));
+
+  importedPeople.forEach((incomingPerson) => {
+    if (existingById.has(incomingPerson.id)) return;
+    const hash = personContentHash(incomingPerson);
+    if (existingHashes.has(hash)) return;
+    mergedPeople.push({ ...incomingPerson });
+    existingById.add(incomingPerson.id);
+    existingHashes.add(hash);
+  });
+
+  return mergedPeople;
+}
+
+function applyImportedData(imported) {
+  state.data = imported;
+  updateState((draft) => {
+    draft.version = 3;
+  });
+
+  els.profileName.value = state.data.profile.name;
+  els.profileBio.value = state.data.profile.bio;
+  els.themeSelect.value = state.data.preferences.theme;
+  els.connectEnabled.checked = Boolean(state.data.connections.enabled);
+  els.connectDisplayName.value = state.data.connections.displayName || state.data.profile.name || '';
+  els.signalingEndpoint.value = state.data.connections.signalingEndpoint || '';
+  applyTheme(state.data.preferences.theme);
+  renderPeopleList();
+  renderPostPeopleMenu();
+  renderFilterPeopleList();
+}
+
+function mergeImportedData(imported) {
+  const { mergedPostsById, addedPostIds } = mergePostsById(state.data.postsById, imported.postsById);
+  const mergedPostOrder = mergePostOrder(state.data.postOrder, imported.postOrder, mergedPostsById, addedPostIds);
+  const mergedPeople = mergePeople(state.data.people, imported.people);
+
+  const mergedData = normalizeV3({
+    ...state.data,
+    postsById: mergedPostsById,
+    postOrder: mergedPostOrder,
+    people: mergedPeople,
+    version: 3,
+  });
+
+  applyImportedData(mergedData);
+}
+
 function buildPostShareText(post) {
   const tags = (post.tags || []).map((tag) => `#${tag}`).join(' ');
   return [
@@ -1549,23 +1726,43 @@ async function handleImportFile(event, mode = 'auto') {
     }
 
     const imported = normalizeImportPayload(parsed);
+    const diff = summarizeImportDiff(imported, state.data);
+    const summary = [
+      `Posts to add: ${diff.postsToAdd}`,
+      `Posts to update: ${diff.postsToUpdate}`,
+      `People to add: ${diff.peopleToAdd}`,
+      `Profile conflicts: ${diff.profileConflicts.length ? diff.profileConflicts.join(', ') : 'none'}`,
+    ].join('\n');
 
-    state.data = imported;
-    updateState((draft) => {
-      draft.version = 3;
+    const mergeChoice = await showModalMessage({
+      title: 'Import backup',
+      message: `Review import changes before applying.\n\n${summary}`,
+      confirmText: 'Merge into current data',
+      cancelText: 'Replace all local data',
+      showCancel: true,
     });
 
-    els.profileName.value = state.data.profile.name;
-    els.profileBio.value = state.data.profile.bio;
-    els.themeSelect.value = state.data.preferences.theme;
-    els.connectEnabled.checked = Boolean(state.data.connections.enabled);
-    els.connectDisplayName.value = state.data.connections.displayName || state.data.profile.name || '';
-    els.signalingEndpoint.value = state.data.connections.signalingEndpoint || '';
-    applyTheme(state.data.preferences.theme);
-    renderPeopleList();
-    renderPostPeopleMenu();
-    renderFilterPeopleList();
-    toast('Backup imported.');
+    if (mergeChoice === true) {
+      mergeImportedData(imported);
+      toast('Backup merged into current data.');
+      return;
+    }
+
+    const replaceConfirmed = await showModalMessage({
+      title: 'Replace local data?',
+      message: 'This will overwrite all current profile, people, and memories on this device. This cannot be undone without another backup file.',
+      confirmText: 'Replace everything',
+      cancelText: 'Cancel',
+      showCancel: true,
+    });
+
+    if (!replaceConfirmed) {
+      toast('Import canceled.', 'warn');
+      return;
+    }
+
+    applyImportedData(imported);
+    toast('Backup imported by replacing local data.');
   } catch {
     toast('Import failed: invalid JSON file.', 'error');
   } finally {
