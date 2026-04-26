@@ -153,6 +153,42 @@ button, .import-label, .tool-upload {
 .post-actions { display: flex; border-top: 1px solid var(--line); margin-top: 10px; padding-top: 8px; }
 .like-btn { flex: 1; background: transparent; color: var(--muted); }
 .like-btn.active { color: var(--fb-blue); }
+.comments {
+  margin-top: 8px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+.comment-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.comment-item {
+  background: #f0f2f5;
+  border-radius: 10px;
+  padding: 8px 10px;
+}
+.comment-author {
+  font-weight: 700;
+  font-size: 13px;
+}
+.comment-text {
+  margin-top: 2px;
+  white-space: pre-wrap;
+}
+.comment-form {
+  margin-top: 10px;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+}
+.comment-input {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 10px 12px;
+  background: #f7f8fa;
+  font: inherit;
+}
 .empty { padding: 26px; text-align: center; color: var(--muted); }
 .empty h2 { color: var(--text); margin-bottom: 6px; }
 .hidden { display: none; }
