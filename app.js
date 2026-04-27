@@ -1,5 +1,6 @@
 const STORAGE_KEY_V3 = 'mybook_v3';
 const STORAGE_KEY_V2 = 'mybook_v2';
+const PASSCODE_STORAGE_KEY = 'mybook_passcode_v1';
 const MEDIA_DB_NAME = 'mybook_media_v1';
 const MEDIA_DB_VERSION = 1;
 const MEDIA_STORE = 'media';
@@ -55,6 +56,7 @@ const els = {
   settingsCloseBtn: document.getElementById('settingsCloseBtn'),
   themeSelect: document.getElementById('themeSelect'),
   settingsClearBtn: document.getElementById('settingsClearBtn'),
+  changePasscodeBtn: document.getElementById('changePasscodeBtn'),
   updateAppBtn: document.getElementById('updateAppBtn'),
   exportBtn: document.getElementById('exportBtn'),
   importMemoryFile: document.getElementById('importMemoryFile'),
@@ -326,10 +328,12 @@ function showModalMessage(options = {}) {
       els.messageModalInput.classList.remove('hidden');
       els.messageModalInput.value = input.defaultValue || '';
       els.messageModalInput.placeholder = input.placeholder || '';
+      els.messageModalInput.type = input.type || 'text';
     } else {
       els.messageModalInput.classList.add('hidden');
       els.messageModalInput.value = '';
       els.messageModalInput.placeholder = '';
+      els.messageModalInput.type = 'text';
     }
 
     els.messageModalCancel.addEventListener('click', onCancel);
@@ -341,6 +345,139 @@ function showModalMessage(options = {}) {
     if (input) els.messageModalInput.focus();
     else els.messageModalConfirm.focus();
   });
+}
+
+function getStoredPasscode() {
+  const stored = localStorage.getItem(PASSCODE_STORAGE_KEY);
+  return typeof stored === 'string' ? stored : '';
+}
+
+function isValidPasscode(value) {
+  return /^\d{6}$/.test(value);
+}
+
+async function promptForPasscode({
+  title,
+  message,
+  confirmText,
+  cancelText = 'Cancel',
+  showCancel = false,
+} = {}) {
+  const entered = await showModalMessage({
+    title,
+    message,
+    confirmText,
+    cancelText,
+    showCancel,
+    input: {
+      placeholder: '6-digit passcode',
+      defaultValue: '',
+      type: 'password',
+    },
+  });
+  if (typeof entered !== 'string') return '';
+  return entered.trim();
+}
+
+async function setupInitialPasscode() {
+  while (true) {
+    const first = await promptForPasscode({
+      title: 'Protect your mybook',
+      message: 'Set a 6-digit passcode for this device.',
+      confirmText: 'Save passcode',
+    });
+    if (!isValidPasscode(first)) {
+      toast('Passcode must be exactly 6 numbers.', 'warn');
+      continue;
+    }
+
+    const second = await promptForPasscode({
+      title: 'Confirm passcode',
+      message: 'Re-enter your 6-digit passcode.',
+      confirmText: 'Confirm',
+    });
+    if (first !== second) {
+      toast('Passcodes did not match. Try again.', 'warn');
+      continue;
+    }
+
+    localStorage.setItem(PASSCODE_STORAGE_KEY, first);
+    toast('Passcode saved.');
+    return true;
+  }
+}
+
+async function unlockWithPasscode(storedPasscode) {
+  while (true) {
+    const entered = await promptForPasscode({
+      title: 'Unlock mybook',
+      message: 'Enter your 6-digit passcode to continue.',
+      confirmText: 'Unlock',
+    });
+    if (entered === storedPasscode) return true;
+    toast('Incorrect passcode. Try again.', 'error');
+  }
+}
+
+async function ensurePasscodeAccess() {
+  const storedPasscode = getStoredPasscode();
+  if (!storedPasscode) {
+    await setupInitialPasscode();
+    return true;
+  }
+  return unlockWithPasscode(storedPasscode);
+}
+
+async function changePasscodeFlow() {
+  const currentPasscode = getStoredPasscode();
+  if (!currentPasscode) {
+    await setupInitialPasscode();
+    return;
+  }
+
+  const currentInput = await promptForPasscode({
+    title: 'Change passcode',
+    message: 'Enter your current passcode first.',
+    confirmText: 'Next',
+    cancelText: 'Cancel',
+    showCancel: true,
+  });
+  if (!currentInput) return;
+  if (currentInput !== currentPasscode) {
+    toast('Current passcode is incorrect.', 'error');
+    return;
+  }
+
+  while (true) {
+    const nextPasscode = await promptForPasscode({
+      title: 'New passcode',
+      message: 'Enter a new 6-digit passcode.',
+      confirmText: 'Continue',
+      cancelText: 'Cancel',
+      showCancel: true,
+    });
+    if (!nextPasscode) return;
+    if (!isValidPasscode(nextPasscode)) {
+      toast('Passcode must be exactly 6 numbers.', 'warn');
+      continue;
+    }
+
+    const confirmPasscode = await promptForPasscode({
+      title: 'Confirm new passcode',
+      message: 'Re-enter the new passcode.',
+      confirmText: 'Save',
+      cancelText: 'Cancel',
+      showCancel: true,
+    });
+    if (!confirmPasscode) return;
+    if (nextPasscode !== confirmPasscode) {
+      toast('Passcodes did not match. Try again.', 'warn');
+      continue;
+    }
+    localStorage.setItem(PASSCODE_STORAGE_KEY, nextPasscode);
+    toast('Passcode updated.');
+    return;
+  }
 }
 
 function toast(message, type = 'ok') {
@@ -1592,6 +1729,10 @@ els.themeSelect.addEventListener('change', () => {
   applyTheme(state.data.preferences.theme);
 });
 
+els.changePasscodeBtn.addEventListener('click', () => {
+  void changePasscodeFlow();
+});
+
 window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
   if (state.data.preferences.theme === 'system') {
     applyTheme('system');
@@ -2636,6 +2777,7 @@ if ('serviceWorker' in navigator) {
 }
 
 async function init() {
+  await ensurePasscodeAccess();
   try {
     await openMediaDb();
   } catch {
