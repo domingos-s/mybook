@@ -50,8 +50,10 @@ const els = {
   clearFilterBtn: document.getElementById('clearFilterBtn'),
   postTemplate: document.getElementById('postTemplate'),
   settingsBtn: document.getElementById('settingsBtn'),
+  appLockMenuBtn: document.getElementById('appLockMenuBtn'),
   settingsModal: document.getElementById('settingsModal'),
   settingsPanel: document.querySelector('#settingsModal .settings-panel'),
+  securityPanel: document.getElementById('securityPanel'),
   settingsCloseBtn: document.getElementById('settingsCloseBtn'),
   themeSelect: document.getElementById('themeSelect'),
   settingsClearBtn: document.getElementById('settingsClearBtn'),
@@ -1616,6 +1618,17 @@ document.addEventListener('click', (event) => {
 
 els.settingsBtn.addEventListener('click', () => {
   openSettings();
+});
+els.appLockMenuBtn.addEventListener('click', () => {
+  closeAccountMenu();
+  openSettings();
+  if (els.securityPanel) {
+    els.securityPanel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    els.securityPanel.classList.remove('focus-pulse');
+    requestAnimationFrame(() => {
+      els.securityPanel.classList.add('focus-pulse');
+    });
+  }
 });
 els.settingsCloseBtn.addEventListener('click', closeSettings);
 els.settingsModal.addEventListener('click', (event) => {
