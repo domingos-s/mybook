@@ -28,7 +28,6 @@ const els = {
   mediaPreview: document.getElementById('mediaPreview'),
   openComposeBtn: document.getElementById('openComposeBtn'),
   openVibeCheckBtn: document.getElementById('openVibeCheckBtn'),
-  openChaChingBtn: document.getElementById('openChaChingBtn'),
   composeModal: document.getElementById('composeModal'),
   composeModalCloseBtn: document.getElementById('composeModalCloseBtn'),
   vibeCheckModal: document.getElementById('vibeCheckModal'),
@@ -39,16 +38,6 @@ const els = {
   vibeSubmitBtn: document.getElementById('vibeSubmitBtn'),
   vibeMotivation: document.getElementById('vibeMotivation'),
   vibeMotivationValue: document.getElementById('vibeMotivationValue'),
-  chaChingModal: document.getElementById('chaChingModal'),
-  chaChingModalCloseBtn: document.getElementById('chaChingModalCloseBtn'),
-  chaChingForm: document.getElementById('chaChingForm'),
-  chaChingVendor: document.getElementById('chaChingVendor'),
-  chaChingAmount: document.getElementById('chaChingAmount'),
-  chaChingReason: document.getElementById('chaChingReason'),
-  chaChingCancelBtn: document.getElementById('chaChingCancelBtn'),
-  spendingTodayValue: document.getElementById('spendingTodayValue'),
-  spending7DayValue: document.getElementById('spending7DayValue'),
-  spending30DayValue: document.getElementById('spending30DayValue'),
   searchInput: document.getElementById('searchInput'),
   sortSelect: document.getElementById('sortSelect'),
   openFilterBtn: document.getElementById('openFilterBtn'),
@@ -1171,10 +1160,8 @@ function closeComposeModal() {
 }
 
 function syncVibeCheckUi() {
-  if (!els.vibeBackBtn || !els.vibeNextBtn || !els.vibeSubmitBtn) return;
   const steps = Array.from(document.querySelectorAll('.vibe-step'));
   const dots = Array.from(document.querySelectorAll('.vibe-step-dot'));
-  if (!steps.length) return;
   steps.forEach((stepNode, index) => {
     stepNode.classList.toggle('hidden', index !== state.activeVibeStep);
   });
@@ -1187,7 +1174,6 @@ function syncVibeCheckUi() {
 }
 
 function resetVibeCheckForm() {
-  if (!els.vibeCheckForm) return;
   els.vibeCheckForm.reset();
   if (els.vibeMotivationValue) els.vibeMotivationValue.textContent = '6';
   state.activeVibeStep = 0;
@@ -1195,13 +1181,11 @@ function resetVibeCheckForm() {
 }
 
 function openVibeCheckModal() {
-  if (!els.vibeCheckModal) return;
   resetVibeCheckForm();
   openModalOverlay(els.vibeCheckModal);
 }
 
 function closeVibeCheckModal() {
-  if (!els.vibeCheckModal) return;
   closeModalOverlay(els.vibeCheckModal);
 }
 
@@ -1211,7 +1195,6 @@ function createPostEntry({
   tags = [],
   peopleIds = [],
   media = [],
-  spending = null,
 }) {
   const trimmedText = text.trim();
   if (!trimmedText && (!Array.isArray(media) || media.length === 0)) return null;
@@ -1223,59 +1206,9 @@ function createPostEntry({
     tags,
     peopleIds,
     media,
-    spending,
     reactions: {},
     comments: [],
   });
-}
-
-function openChaChingModal() {
-  if (!els.chaChingForm || !els.chaChingModal) return;
-  els.chaChingForm.reset();
-  openModalOverlay(els.chaChingModal);
-}
-
-function closeChaChingModal() {
-  if (!els.chaChingModal) return;
-  closeModalOverlay(els.chaChingModal);
-}
-
-function toDayKey(value) {
-  if (!value) return '';
-  const dt = new Date(value);
-  if (Number.isNaN(dt.getTime())) return '';
-  return dt.toISOString().slice(0, 10);
-}
-
-function renderSpendingDashboard() {
-  if (!els.spendingTodayValue || !els.spending7DayValue || !els.spending30DayValue) return;
-  const today = new Date();
-  const todayKey = toDayKey(today.toISOString());
-  const millisPerDay = 24 * 60 * 60 * 1000;
-  let todayTotal = 0;
-  let last7DaysTotal = 0;
-  let last30DaysTotal = 0;
-
-  Object.values(state.data.postsById || {}).forEach((post) => {
-    const amount = Number(post?.spending?.amount || 0);
-    if (!Number.isFinite(amount) || amount <= 0) return;
-    const postKey = toDayKey(post.date || post.createdAt);
-    if (!postKey) return;
-    const postDay = new Date(`${postKey}T00:00:00.000Z`);
-    const diffDays = Math.floor((Date.parse(`${todayKey}T00:00:00.000Z`) - postDay.getTime()) / millisPerDay);
-    if (diffDays < 0) return;
-    if (diffDays === 0) todayTotal += amount;
-    if (diffDays <= 6) last7DaysTotal += amount;
-    if (diffDays <= 29) last30DaysTotal += amount;
-  });
-
-  els.spendingTodayValue.textContent = formatCurrency(todayTotal);
-  els.spending7DayValue.textContent = formatCurrency(last7DaysTotal);
-  els.spending30DayValue.textContent = formatCurrency(last30DaysTotal);
-}
-
-function formatCurrency(amount) {
-  return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(amount || 0);
 }
 
 function openAccountMenu() {
@@ -1688,118 +1621,73 @@ els.addPersonBtn.addEventListener('click', () => {
 });
 
 els.openComposeBtn.addEventListener('click', openComposeModal);
-if (els.openVibeCheckBtn) els.openVibeCheckBtn.addEventListener('click', openVibeCheckModal);
-if (els.openChaChingBtn) els.openChaChingBtn.addEventListener('click', openChaChingModal);
+els.openVibeCheckBtn.addEventListener('click', openVibeCheckModal);
 els.composeModalCloseBtn.addEventListener('click', closeComposeModal);
 els.composeModal.addEventListener('click', (event) => {
   if (event.target === els.composeModal) closeComposeModal();
 });
-if (els.vibeCheckModalCloseBtn) els.vibeCheckModalCloseBtn.addEventListener('click', closeVibeCheckModal);
-if (els.vibeCheckModal) {
-  els.vibeCheckModal.addEventListener('click', (event) => {
-    if (event.target === els.vibeCheckModal) closeVibeCheckModal();
-  });
-}
-if (els.vibeBackBtn) {
-  els.vibeBackBtn.addEventListener('click', () => {
-    state.activeVibeStep = Math.max(0, state.activeVibeStep - 1);
-    syncVibeCheckUi();
-  });
-}
-if (els.vibeNextBtn && els.vibeCheckForm) {
-  els.vibeNextBtn.addEventListener('click', () => {
-    if (state.activeVibeStep === 0) {
-      const mood = els.vibeCheckForm.elements.vibeMood.value;
-      if (!mood) {
-        toast('Pick a mood to continue.', 'warn');
-        return;
-      }
-    }
-    state.activeVibeStep = Math.min(2, state.activeVibeStep + 1);
-    syncVibeCheckUi();
-  });
-}
-if (els.vibeMotivation && els.vibeMotivationValue) {
-  els.vibeMotivation.addEventListener('input', () => {
-    els.vibeMotivationValue.textContent = els.vibeMotivation.value;
-  });
-}
-if (els.vibeCheckForm) {
-  els.vibeCheckForm.addEventListener('submit', (event) => {
-    event.preventDefault();
+els.vibeCheckModalCloseBtn.addEventListener('click', closeVibeCheckModal);
+els.vibeCheckModal.addEventListener('click', (event) => {
+  if (event.target === els.vibeCheckModal) closeVibeCheckModal();
+});
+els.vibeBackBtn.addEventListener('click', () => {
+  state.activeVibeStep = Math.max(0, state.activeVibeStep - 1);
+  syncVibeCheckUi();
+});
+els.vibeNextBtn.addEventListener('click', () => {
+  if (state.activeVibeStep === 0) {
     const mood = els.vibeCheckForm.elements.vibeMood.value;
     if (!mood) {
-      toast('Pick a mood to post your vibe check.', 'warn');
-      state.activeVibeStep = 0;
-      syncVibeCheckUi();
+      toast('Pick a mood to continue.', 'warn');
       return;
     }
+  }
+  state.activeVibeStep = Math.min(2, state.activeVibeStep + 1);
+  syncVibeCheckUi();
+});
+els.vibeMotivation.addEventListener('input', () => {
+  els.vibeMotivationValue.textContent = els.vibeMotivation.value;
+});
+els.vibeCheckForm.addEventListener('submit', (event) => {
+  event.preventDefault();
+  const mood = els.vibeCheckForm.elements.vibeMood.value;
+  if (!mood) {
+    toast('Pick a mood to post your vibe check.', 'warn');
+    state.activeVibeStep = 0;
+    syncVibeCheckUi();
+    return;
+  }
 
-    const motivation = els.vibeCheckForm.elements.vibeMotivation.value;
-    const energy = els.vibeCheckForm.elements.vibeEnergy.value;
-    const win = els.vibeCheckForm.elements.vibeWin.value.trim();
-    const need = els.vibeCheckForm.elements.vibeNeed.value.trim();
-    const notes = els.vibeCheckForm.elements.vibeNotes.value.trim();
+  const motivation = els.vibeCheckForm.elements.vibeMotivation.value;
+  const energy = els.vibeCheckForm.elements.vibeEnergy.value;
+  const win = els.vibeCheckForm.elements.vibeWin.value.trim();
+  const need = els.vibeCheckForm.elements.vibeNeed.value.trim();
+  const notes = els.vibeCheckForm.elements.vibeNotes.value.trim();
 
-    const lines = [
-      '✨ Vibe Check',
-      `Mood: ${mood}`,
-      `Motivation: ${motivation}/10`,
-      `Energy: ${energy} ⚡`,
-      win ? `Small win: ${win} 🏆` : '',
-      need ? `What I need next: ${need} 🤝` : '',
-      notes ? `Notes: ${notes}` : '',
-    ].filter(Boolean);
+  const lines = [
+    '✨ Vibe Check',
+    `Mood: ${mood}`,
+    `Motivation: ${motivation}/10`,
+    `Energy: ${energy} ⚡`,
+    win ? `Small win: ${win} 🏆` : '',
+    need ? `What I need next: ${need} 🤝` : '',
+    notes ? `Notes: ${notes}` : '',
+  ].filter(Boolean);
 
-    const post = createPostEntry({
-      text: lines.join('\n'),
-      date: new Date().toISOString().slice(0, 10),
-      tags: ['vibe-check', 'check-in'],
-    });
-    if (!post) return;
-
-    updateState((draft) => {
-      draft.postsById[post.id] = post;
-      draft.postOrder.unshift(post.id);
-    });
-    closeVibeCheckModal();
-    toast('Vibe check saved 💛');
+  const post = createPostEntry({
+    text: lines.join('\n'),
+    date: new Date().toISOString().slice(0, 10),
+    tags: ['vibe-check', 'check-in'],
   });
-}
-if (els.chaChingModalCloseBtn) els.chaChingModalCloseBtn.addEventListener('click', closeChaChingModal);
-if (els.chaChingCancelBtn) els.chaChingCancelBtn.addEventListener('click', closeChaChingModal);
-if (els.chaChingModal) {
-  els.chaChingModal.addEventListener('click', (event) => {
-    if (event.target === els.chaChingModal) closeChaChingModal();
-  });
-}
-if (els.chaChingForm && els.chaChingVendor && els.chaChingReason && els.chaChingAmount) {
-  els.chaChingForm.addEventListener('submit', (event) => {
-    event.preventDefault();
-    const vendor = els.chaChingVendor.value.trim();
-    const reason = els.chaChingReason.value.trim();
-    const amount = Number(els.chaChingAmount.value);
-    if (!vendor || !reason || !Number.isFinite(amount) || amount <= 0) {
-      toast('Add vendor, amount, and reason to save spending.', 'warn');
-      return;
-    }
+  if (!post) return;
 
-    const post = createPostEntry({
-      text: `Cha-Ching 🤑\nVendor: ${vendor}\nAmount: ${formatCurrency(amount)}\nReason: ${reason}`,
-      date: new Date().toISOString().slice(0, 10),
-      tags: ['cha-ching', 'spending'],
-      spending: { vendor, amount, reason },
-    });
-    if (!post) return;
-
-    updateState((draft) => {
-      draft.postsById[post.id] = post;
-      draft.postOrder.unshift(post.id);
-    });
-    closeChaChingModal();
-    toast('Spending saved.');
+  updateState((draft) => {
+    draft.postsById[post.id] = post;
+    draft.postOrder.unshift(post.id);
   });
-}
+  closeVibeCheckModal();
+  toast('Vibe check saved 💛');
+});
 
 els.personModalCloseBtn.addEventListener('click', () => closeModalOverlay(els.personModal));
 els.personModal.addEventListener('click', (event) => {
@@ -1930,11 +1818,8 @@ document.addEventListener('keydown', (event) => {
   if (event.key === 'Escape' && !els.composeModal.classList.contains('hidden')) {
     closeComposeModal();
   }
-  if (event.key === 'Escape' && els.vibeCheckModal && !els.vibeCheckModal.classList.contains('hidden')) {
+  if (event.key === 'Escape' && !els.vibeCheckModal.classList.contains('hidden')) {
     closeVibeCheckModal();
-  }
-  if (event.key === 'Escape' && els.chaChingModal && !els.chaChingModal.classList.contains('hidden')) {
-    closeChaChingModal();
   }
 });
 
@@ -3021,7 +2906,7 @@ els.importFile.addEventListener('change', (event) => {
   handleImportFile(event, 'auto');
 });
 
-if (els.vibeCheckForm) syncVibeCheckUi();
+syncVibeCheckUi();
 
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('sw.js').catch(() => {});

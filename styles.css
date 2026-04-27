@@ -486,10 +486,6 @@ textarea:focus-visible, input:focus-visible, select:focus-visible {
   gap: 8px;
   margin-top: 8px;
 }
-.cha-ching-form {
-  display: grid;
-  gap: 4px;
-}
 
 .message-modal {
   position: fixed;
@@ -583,9 +579,6 @@ textarea:focus-visible, input:focus-visible, select:focus-visible {
   .composer-row,
   .filters,
   .comment-form {
-    grid-template-columns: 1fr;
-  }
-  .spending-dashboard {
     grid-template-columns: 1fr;
   }
   .vibe-mood-grid {
