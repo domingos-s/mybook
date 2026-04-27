@@ -180,6 +180,42 @@ textarea:focus-visible, input:focus-visible, select:focus-visible {
 .feed { display: flex; flex-direction: column; gap: var(--space-3); }
 .compose-actions { display: flex; gap: 10px; flex-wrap: wrap; }
 .compose-launch { align-self: flex-start; }
+.spending-dashboard {
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-1);
+  padding: 12px;
+}
+.spending-dashboard h2 {
+  margin: 0 0 10px;
+  font-size: 17px;
+}
+.spending-cards {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+.spending-card {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px;
+}
+.spending-label {
+  font-size: 12px;
+  color: var(--text-2);
+  margin-bottom: 6px;
+}
+.spending-value {
+  font-size: 21px;
+  font-weight: 800;
+  letter-spacing: -0.5px;
+}
+.spending-form {
+  display: grid;
+  gap: 10px;
+}
 .composer { padding: var(--space-3); }
 .composer textarea, .filters input, .filters select, .composer input {
   border: 1px solid var(--border);
@@ -558,6 +594,9 @@ textarea:focus-visible, input:focus-visible, select:focus-visible {
   .composer-row,
   .filters,
   .comment-form {
+    grid-template-columns: 1fr;
+  }
+  .spending-cards {
     grid-template-columns: 1fr;
   }
   .vibe-mood-grid {

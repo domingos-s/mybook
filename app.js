@@ -28,8 +28,18 @@ const els = {
   mediaPreview: document.getElementById('mediaPreview'),
   openComposeBtn: document.getElementById('openComposeBtn'),
   openVibeCheckBtn: document.getElementById('openVibeCheckBtn'),
+  openSpendingBtn: document.getElementById('openSpendingBtn'),
+  spendingToday: document.getElementById('spendingToday'),
+  spendingLast7: document.getElementById('spendingLast7'),
+  spendingLast30: document.getElementById('spendingLast30'),
   composeModal: document.getElementById('composeModal'),
   composeModalCloseBtn: document.getElementById('composeModalCloseBtn'),
+  spendingModal: document.getElementById('spendingModal'),
+  spendingModalCloseBtn: document.getElementById('spendingModalCloseBtn'),
+  spendingForm: document.getElementById('spendingForm'),
+  spendingVendor: document.getElementById('spendingVendor'),
+  spendingAmount: document.getElementById('spendingAmount'),
+  spendingReason: document.getElementById('spendingReason'),
   vibeCheckModal: document.getElementById('vibeCheckModal'),
   vibeCheckModalCloseBtn: document.getElementById('vibeCheckModalCloseBtn'),
   vibeCheckForm: document.getElementById('vibeCheckForm'),
@@ -115,6 +125,7 @@ function makeDefaultData() {
     version: 3,
     profile: { name: '', bio: '', avatarDataUrl: '' },
     people: [],
+    spending: [],
     postsById: {},
     postOrder: [],
     preferences: {
@@ -538,6 +549,7 @@ function updateState(mutator, options = {}) {
 
   if (render) {
     renderAvatar();
+    renderSpendingDashboard();
     renderPosts();
   }
 
@@ -568,6 +580,17 @@ function normalizePreferences(preferences = {}) {
     ...(preferences && typeof preferences === 'object' ? preferences : {}),
     theme: normalizedTheme,
   };
+}
+
+function normalizeSpending(spending = []) {
+  if (!Array.isArray(spending)) return [];
+  return spending.map((entry) => ({
+    id: typeof entry.id === 'string' && entry.id ? entry.id : crypto.randomUUID(),
+    vendor: typeof entry.vendor === 'string' ? entry.vendor.trim() : '',
+    amount: Number.isFinite(Number(entry.amount)) ? Math.max(0, Number(entry.amount)) : 0,
+    reason: typeof entry.reason === 'string' ? entry.reason.trim() : '',
+    createdAt: typeof entry.createdAt === 'string' ? entry.createdAt : new Date().toISOString(),
+  })).filter((entry) => entry.vendor && entry.reason && entry.amount > 0);
 }
 
 
@@ -717,6 +740,7 @@ function normalizeV3(raw = {}) {
     avatarDataUrl: typeof person.avatarDataUrl === 'string' ? person.avatarDataUrl : '',
   })).filter((person) => person.name.trim()) : [];
   normalized.preferences = normalizePreferences(raw.preferences || {});
+  normalized.spending = normalizeSpending(raw.spending || []);
   normalized.connections = normalizeConnections(raw.connections || {});
 
   const incomingPostsById = raw.postsById && typeof raw.postsById === 'object' ? raw.postsById : {};
@@ -835,6 +859,44 @@ function initials(name) {
     .slice(0, 2)
     .map((chunk) => chunk[0].toUpperCase())
     .join('') || 'M';
+}
+
+function formatCurrency(value) {
+  const amount = Number.isFinite(Number(value)) ? Number(value) : 0;
+  return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(amount);
+}
+
+function startOfDay(date = new Date()) {
+  const day = new Date(date);
+  day.setHours(0, 0, 0, 0);
+  return day;
+}
+
+function getSpendingTotals() {
+  const now = new Date();
+  const todayStart = startOfDay(now).getTime();
+  const sevenDayStart = todayStart - (6 * 24 * 60 * 60 * 1000);
+  const thirtyDayStart = todayStart - (29 * 24 * 60 * 60 * 1000);
+  const totals = { today: 0, last7: 0, last30: 0 };
+  const entries = Array.isArray(state.data.spending) ? state.data.spending : [];
+
+  entries.forEach((entry) => {
+    const createdTime = new Date(entry.createdAt).getTime();
+    if (!Number.isFinite(createdTime)) return;
+    const amount = Number(entry.amount) || 0;
+    if (createdTime >= todayStart) totals.today += amount;
+    if (createdTime >= sevenDayStart) totals.last7 += amount;
+    if (createdTime >= thirtyDayStart) totals.last30 += amount;
+  });
+
+  return totals;
+}
+
+function renderSpendingDashboard() {
+  const totals = getSpendingTotals();
+  els.spendingToday.textContent = formatCurrency(totals.today);
+  els.spendingLast7.textContent = formatCurrency(totals.last7);
+  els.spendingLast30.textContent = formatCurrency(totals.last30);
 }
 
 function getLocalActorMeta() {
@@ -1149,6 +1211,15 @@ function openComposeModal() {
 
 function closeComposeModal() {
   closeModalOverlay(els.composeModal);
+}
+
+function openSpendingModal() {
+  els.spendingForm.reset();
+  openModalOverlay(els.spendingModal);
+}
+
+function closeSpendingModal() {
+  closeModalOverlay(els.spendingModal);
 }
 
 function syncVibeCheckUi() {
@@ -1614,9 +1685,38 @@ els.addPersonBtn.addEventListener('click', () => {
 
 els.openComposeBtn.addEventListener('click', openComposeModal);
 els.openVibeCheckBtn.addEventListener('click', openVibeCheckModal);
+els.openSpendingBtn.addEventListener('click', openSpendingModal);
 els.composeModalCloseBtn.addEventListener('click', closeComposeModal);
 els.composeModal.addEventListener('click', (event) => {
   if (event.target === els.composeModal) closeComposeModal();
+});
+els.spendingModalCloseBtn.addEventListener('click', closeSpendingModal);
+els.spendingModal.addEventListener('click', (event) => {
+  if (event.target === els.spendingModal) closeSpendingModal();
+});
+els.spendingForm.addEventListener('submit', (event) => {
+  event.preventDefault();
+  const vendor = els.spendingVendor.value.trim();
+  const reason = els.spendingReason.value.trim();
+  const amount = Number(els.spendingAmount.value);
+  if (!vendor || !reason || !Number.isFinite(amount) || amount <= 0) {
+    toast('Add a vendor, valid amount, and reason.', 'warn');
+    return;
+  }
+
+  updateState((draft) => {
+    const entries = Array.isArray(draft.spending) ? draft.spending : [];
+    entries.unshift({
+      id: crypto.randomUUID(),
+      vendor,
+      amount: Number(amount.toFixed(2)),
+      reason,
+      createdAt: new Date().toISOString(),
+    });
+    draft.spending = entries.slice(0, 500);
+  });
+  closeSpendingModal();
+  toast('Spending saved.');
 });
 els.vibeCheckModalCloseBtn.addEventListener('click', closeVibeCheckModal);
 els.vibeCheckModal.addEventListener('click', (event) => {
@@ -1809,6 +1909,9 @@ document.addEventListener('keydown', (event) => {
   }
   if (event.key === 'Escape' && !els.composeModal.classList.contains('hidden')) {
     closeComposeModal();
+  }
+  if (event.key === 'Escape' && !els.spendingModal.classList.contains('hidden')) {
+    closeSpendingModal();
   }
   if (event.key === 'Escape' && !els.vibeCheckModal.classList.contains('hidden')) {
     closeVibeCheckModal();
@@ -2913,6 +3016,7 @@ async function init() {
   await load();
   await migrateLegacyMediaToIndexedDb();
   renderAvatar();
+  renderSpendingDashboard();
   renderPeopleList();
   renderDirectNotesList();
   renderPostPeopleMenu();
