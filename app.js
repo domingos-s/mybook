@@ -28,7 +28,6 @@ const els = {
   mediaPreview: document.getElementById('mediaPreview'),
   openComposeBtn: document.getElementById('openComposeBtn'),
   openVibeCheckBtn: document.getElementById('openVibeCheckBtn'),
-  openChaChingBtn: document.getElementById('openChaChingBtn'),
   composeModal: document.getElementById('composeModal'),
   composeModalCloseBtn: document.getElementById('composeModalCloseBtn'),
   vibeCheckModal: document.getElementById('vibeCheckModal'),
@@ -39,16 +38,6 @@ const els = {
   vibeSubmitBtn: document.getElementById('vibeSubmitBtn'),
   vibeMotivation: document.getElementById('vibeMotivation'),
   vibeMotivationValue: document.getElementById('vibeMotivationValue'),
-  chaChingModal: document.getElementById('chaChingModal'),
-  chaChingModalCloseBtn: document.getElementById('chaChingModalCloseBtn'),
-  chaChingForm: document.getElementById('chaChingForm'),
-  chaChingVendor: document.getElementById('chaChingVendor'),
-  chaChingAmount: document.getElementById('chaChingAmount'),
-  chaChingReason: document.getElementById('chaChingReason'),
-  chaChingCancelBtn: document.getElementById('chaChingCancelBtn'),
-  spendingTodayValue: document.getElementById('spendingTodayValue'),
-  spending7DayValue: document.getElementById('spending7DayValue'),
-  spending30DayValue: document.getElementById('spending30DayValue'),
   searchInput: document.getElementById('searchInput'),
   sortSelect: document.getElementById('sortSelect'),
   openFilterBtn: document.getElementById('openFilterBtn'),
@@ -1206,7 +1195,6 @@ function createPostEntry({
   tags = [],
   peopleIds = [],
   media = [],
-  spending = null,
 }) {
   const trimmedText = text.trim();
   if (!trimmedText && (!Array.isArray(media) || media.length === 0)) return null;
@@ -1218,56 +1206,9 @@ function createPostEntry({
     tags,
     peopleIds,
     media,
-    spending,
     reactions: {},
     comments: [],
   });
-}
-
-function openChaChingModal() {
-  els.chaChingForm.reset();
-  openModalOverlay(els.chaChingModal);
-}
-
-function closeChaChingModal() {
-  closeModalOverlay(els.chaChingModal);
-}
-
-function toDayKey(value) {
-  if (!value) return '';
-  const dt = new Date(value);
-  if (Number.isNaN(dt.getTime())) return '';
-  return dt.toISOString().slice(0, 10);
-}
-
-function renderSpendingDashboard() {
-  const today = new Date();
-  const todayKey = toDayKey(today.toISOString());
-  const millisPerDay = 24 * 60 * 60 * 1000;
-  let todayTotal = 0;
-  let last7DaysTotal = 0;
-  let last30DaysTotal = 0;
-
-  Object.values(state.data.postsById || {}).forEach((post) => {
-    const amount = Number(post?.spending?.amount || 0);
-    if (!Number.isFinite(amount) || amount <= 0) return;
-    const postKey = toDayKey(post.date || post.createdAt);
-    if (!postKey) return;
-    const postDay = new Date(`${postKey}T00:00:00.000Z`);
-    const diffDays = Math.floor((Date.parse(`${todayKey}T00:00:00.000Z`) - postDay.getTime()) / millisPerDay);
-    if (diffDays < 0) return;
-    if (diffDays === 0) todayTotal += amount;
-    if (diffDays <= 6) last7DaysTotal += amount;
-    if (diffDays <= 29) last30DaysTotal += amount;
-  });
-
-  els.spendingTodayValue.textContent = formatCurrency(todayTotal);
-  els.spending7DayValue.textContent = formatCurrency(last7DaysTotal);
-  els.spending30DayValue.textContent = formatCurrency(last30DaysTotal);
-}
-
-function formatCurrency(amount) {
-  return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(amount || 0);
 }
 
 function openAccountMenu() {
@@ -1681,7 +1622,6 @@ els.addPersonBtn.addEventListener('click', () => {
 
 els.openComposeBtn.addEventListener('click', openComposeModal);
 els.openVibeCheckBtn.addEventListener('click', openVibeCheckModal);
-els.openChaChingBtn.addEventListener('click', openChaChingModal);
 els.composeModalCloseBtn.addEventListener('click', closeComposeModal);
 els.composeModal.addEventListener('click', (event) => {
   if (event.target === els.composeModal) closeComposeModal();
@@ -1747,36 +1687,6 @@ els.vibeCheckForm.addEventListener('submit', (event) => {
   });
   closeVibeCheckModal();
   toast('Vibe check saved 💛');
-});
-els.chaChingModalCloseBtn.addEventListener('click', closeChaChingModal);
-els.chaChingCancelBtn.addEventListener('click', closeChaChingModal);
-els.chaChingModal.addEventListener('click', (event) => {
-  if (event.target === els.chaChingModal) closeChaChingModal();
-});
-els.chaChingForm.addEventListener('submit', (event) => {
-  event.preventDefault();
-  const vendor = els.chaChingVendor.value.trim();
-  const reason = els.chaChingReason.value.trim();
-  const amount = Number(els.chaChingAmount.value);
-  if (!vendor || !reason || !Number.isFinite(amount) || amount <= 0) {
-    toast('Add vendor, amount, and reason to save spending.', 'warn');
-    return;
-  }
-
-  const post = createPostEntry({
-    text: `Cha-Ching 🤑\nVendor: ${vendor}\nAmount: ${formatCurrency(amount)}\nReason: ${reason}`,
-    date: new Date().toISOString().slice(0, 10),
-    tags: ['cha-ching', 'spending'],
-    spending: { vendor, amount, reason },
-  });
-  if (!post) return;
-
-  updateState((draft) => {
-    draft.postsById[post.id] = post;
-    draft.postOrder.unshift(post.id);
-  });
-  closeChaChingModal();
-  toast('Spending saved.');
 });
 
 els.personModalCloseBtn.addEventListener('click', () => closeModalOverlay(els.personModal));
@@ -1910,9 +1820,6 @@ document.addEventListener('keydown', (event) => {
   }
   if (event.key === 'Escape' && !els.vibeCheckModal.classList.contains('hidden')) {
     closeVibeCheckModal();
-  }
-  if (event.key === 'Escape' && !els.chaChingModal.classList.contains('hidden')) {
-    closeChaChingModal();
   }
 });
 
