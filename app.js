@@ -40,6 +40,7 @@ const els = {
   personNameInput: document.getElementById('personNameInput'),
   personRelationshipInput: document.getElementById('personRelationshipInput'),
   personPicInput: document.getElementById('personPicInput'),
+  deletePersonBtn: document.getElementById('deletePersonBtn'),
   savePersonBtn: document.getElementById('savePersonBtn'),
   filterModal: document.getElementById('filterModal'),
   filterModalCloseBtn: document.getElementById('filterModalCloseBtn'),
@@ -85,6 +86,7 @@ const state = {
   selectedPostPeople: [],
   activeFilters: { tags: [], peopleIds: [] },
   pendingPersonAvatarDataUrl: '',
+  editingPersonId: '',
   connectionRuntime: {
     mode: '',
     signalingRole: '',
@@ -877,6 +879,7 @@ function renderPeopleList() {
   state.data.people.forEach((person) => {
     const row = document.createElement('div');
     row.className = 'person-row';
+    row.tabIndex = 0;
     const avatar = document.createElement('div');
     avatar.className = 'person-avatar';
     if (person.avatarDataUrl) avatar.style.backgroundImage = `url("${person.avatarDataUrl}")`;
@@ -884,8 +887,61 @@ function renderPeopleList() {
     const text = document.createElement('div');
     text.innerHTML = `<strong>${person.name}</strong><span>${person.relationship}</span>`;
     row.append(avatar, text);
+    let longPressTimer = 0;
+    let longPressHandled = false;
+    const clearLongPressTimer = () => {
+      if (longPressTimer) {
+        window.clearTimeout(longPressTimer);
+        longPressTimer = 0;
+      }
+    };
+    const startLongPress = () => {
+      clearLongPressTimer();
+      longPressHandled = false;
+      longPressTimer = window.setTimeout(() => {
+        longPressHandled = true;
+        openPersonModal(person);
+      }, 500);
+    };
+    row.addEventListener('pointerdown', (event) => {
+      if (event.button !== 0) return;
+      startLongPress();
+    });
+    row.addEventListener('pointerup', clearLongPressTimer);
+    row.addEventListener('pointercancel', clearLongPressTimer);
+    row.addEventListener('pointerleave', clearLongPressTimer);
+    row.addEventListener('contextmenu', (event) => {
+      event.preventDefault();
+      clearLongPressTimer();
+      openPersonModal(person);
+    });
+    row.addEventListener('click', (event) => {
+      if (longPressHandled) {
+        event.preventDefault();
+        longPressHandled = false;
+      }
+    });
+    row.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        openPersonModal(person);
+      }
+    });
     els.peopleList.append(row);
   });
+}
+
+function openPersonModal(person = null) {
+  state.pendingPersonAvatarDataUrl = person?.avatarDataUrl || '';
+  state.editingPersonId = person?.id || '';
+  els.personNameInput.value = person?.name || '';
+  els.personRelationshipInput.value = person?.relationship || '';
+  els.personPicInput.value = '';
+  const title = document.getElementById('personModalTitle');
+  title.textContent = person ? 'Edit person' : 'Add person';
+  els.savePersonBtn.textContent = person ? 'Save changes' : 'Save person';
+  els.deletePersonBtn.classList.toggle('hidden', !person);
+  openModalOverlay(els.personModal);
 }
 
 function renderPostPeopleMenu() {
@@ -1357,11 +1413,7 @@ els.postPeopleBtn.addEventListener('click', () => {
 });
 
 els.addPersonBtn.addEventListener('click', () => {
-  state.pendingPersonAvatarDataUrl = '';
-  els.personNameInput.value = '';
-  els.personRelationshipInput.value = '';
-  els.personPicInput.value = '';
-  openModalOverlay(els.personModal);
+  openPersonModal();
 });
 
 els.openComposeBtn.addEventListener('click', openComposeModal);
@@ -1394,6 +1446,14 @@ els.savePersonBtn.addEventListener('click', () => {
     return;
   }
   updateState((draft) => {
+    if (state.editingPersonId) {
+      const person = draft.people.find((item) => item.id === state.editingPersonId);
+      if (!person) return;
+      person.name = name;
+      person.relationship = relationship;
+      person.avatarDataUrl = state.pendingPersonAvatarDataUrl;
+      return;
+    }
     draft.people.push({
       id: crypto.randomUUID(),
       name,
@@ -1404,7 +1464,35 @@ els.savePersonBtn.addEventListener('click', () => {
   renderPeopleList();
   renderPostPeopleMenu();
   renderFilterPeopleList();
+  state.editingPersonId = '';
   closeModalOverlay(els.personModal);
+});
+
+els.deletePersonBtn.addEventListener('click', async () => {
+  if (!state.editingPersonId) return;
+  const confirmed = await showModalMessage({
+    title: 'Delete person',
+    message: 'Remove this person from your People list and untag them from all memories?',
+    confirmText: 'Delete',
+    cancelText: 'Cancel',
+    showCancel: true,
+  });
+  if (!confirmed) return;
+  const personId = state.editingPersonId;
+  updateState((draft) => {
+    draft.people = draft.people.filter((person) => person.id !== personId);
+    Object.values(draft.postsById).forEach((post) => {
+      post.peopleIds = (post.peopleIds || []).filter((id) => id !== personId);
+    });
+  }, { render: false });
+  state.selectedPostPeople = state.selectedPostPeople.filter((id) => id !== personId);
+  state.activeFilters.peopleIds = state.activeFilters.peopleIds.filter((id) => id !== personId);
+  state.editingPersonId = '';
+  closeModalOverlay(els.personModal);
+  renderPeopleList();
+  renderPostPeopleMenu();
+  renderFilterPeopleList();
+  renderPosts();
 });
 
 els.openFilterBtn.addEventListener('click', () => {
