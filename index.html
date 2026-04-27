@@ -11,7 +11,7 @@
   <link rel="manifest" href="manifest.webmanifest" />
   <link rel="stylesheet" href="styles.css" />
 </head>
-<body class="app-locked">
+<body>
   <header class="topbar">
     <div class="brand">mybook</div>
     <div class="top-actions">
@@ -101,30 +101,8 @@
         <p id="connectStatus" class="connect-status">Connection disabled.</p>
       </section>
 
-      <section class="security-panel">
-        <div class="connect-panel-head">
-          <h3>App lock</h3>
-          <label class="connect-toggle">
-            <input id="appLockEnabled" type="checkbox" />
-            <span>Enable</span>
-          </label>
-        </div>
-        <p class="connect-note">Require your password before the app contents are shown.</p>
-        <button id="appLockPasswordBtn" class="ghost" type="button">Set password</button>
-      </section>
-
       <button id="settingsClearBtn" class="danger" type="button">Clear all memories</button>
     </div>
-  </div>
-
-  <div id="lockScreen" class="lock-screen hidden" role="dialog" aria-modal="true" aria-labelledby="lockScreenTitle">
-    <form id="lockForm" class="lock-card">
-      <h2 id="lockScreenTitle">App locked</h2>
-      <p>Enter your password to open mybook.</p>
-      <input id="lockPasswordInput" type="password" autocomplete="current-password" placeholder="Password" required />
-      <button type="submit" class="primary">Unlock</button>
-      <p id="lockError" class="lock-error hidden">Incorrect password. Try again.</p>
-    </form>
   </div>
 
   <div id="personModal" class="settings-modal hidden" role="dialog" aria-modal="true" aria-labelledby="personModalTitle">

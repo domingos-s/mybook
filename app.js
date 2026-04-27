@@ -68,14 +68,8 @@ const els = {
   applyCodeBtn: document.getElementById('applyCodeBtn'),
   directNotesList: document.getElementById('directNotesList'),
   connectStatus: document.getElementById('connectStatus'),
-  appLockEnabled: document.getElementById('appLockEnabled'),
-  appLockPasswordBtn: document.getElementById('appLockPasswordBtn'),
   accountMenuBtn: document.getElementById('accountMenuBtn'),
   accountMenu: document.getElementById('accountMenu'),
-  lockScreen: document.getElementById('lockScreen'),
-  lockForm: document.getElementById('lockForm'),
-  lockPasswordInput: document.getElementById('lockPasswordInput'),
-  lockError: document.getElementById('lockError'),
   messageModal: document.getElementById('messageModal'),
   messageModalTitle: document.getElementById('messageModalTitle'),
   messageModalText: document.getElementById('messageModalText'),
@@ -113,10 +107,6 @@ function makeDefaultData() {
     postOrder: [],
     preferences: {
       theme: 'system',
-      security: {
-        lockEnabled: false,
-        passwordHash: '',
-      },
     },
     connections: {
       enabled: false,
@@ -407,69 +397,6 @@ function updateState(mutator, options = {}) {
   return true;
 }
 
-function getSecurityPrefs() {
-  const security = state.data?.preferences?.security || {};
-  return {
-    lockEnabled: Boolean(security.lockEnabled),
-    passwordHash: typeof security.passwordHash === 'string' ? security.passwordHash : '',
-  };
-}
-
-function syncSecurityControls() {
-  const { lockEnabled, passwordHash } = getSecurityPrefs();
-  els.appLockEnabled.checked = lockEnabled && Boolean(passwordHash);
-  els.appLockPasswordBtn.textContent = passwordHash ? 'Change password' : 'Set password';
-}
-
-async function sha256Hex(value) {
-  const bytes = new TextEncoder().encode(value);
-  const hashBuffer = await crypto.subtle.digest('SHA-256', bytes);
-  return [...new Uint8Array(hashBuffer)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
-}
-
-async function verifyLockPassword(input) {
-  const { passwordHash } = getSecurityPrefs();
-  if (!passwordHash) return false;
-  const inputHash = await sha256Hex(input);
-  return inputHash === passwordHash;
-}
-
-function lockUi() {
-  document.body.classList.add('app-locked');
-}
-
-function unlockUi() {
-  document.body.classList.remove('app-locked');
-}
-
-async function promptNewLockPassword() {
-  const first = await showModalMessage({
-    title: 'Set app password',
-    message: 'Create a password for unlocking this app on this device.',
-    confirmText: 'Next',
-    cancelText: 'Cancel',
-    showCancel: true,
-    input: { placeholder: 'New password', defaultValue: '' },
-  });
-  if (!first) return '';
-
-  const second = await showModalMessage({
-    title: 'Confirm password',
-    message: 'Enter the same password again.',
-    confirmText: 'Save password',
-    cancelText: 'Cancel',
-    showCancel: true,
-    input: { placeholder: 'Confirm password', defaultValue: '' },
-  });
-
-  if (!second) return '';
-  if (first !== second) {
-    toast('Passwords did not match.', 'warn');
-    return '';
-  }
-  return first;
-}
-
 function normalizeProfile(profile = {}) {
   const avatarDataUrl =
     typeof profile.avatarDataUrl === 'string'
@@ -488,16 +415,11 @@ function normalizeProfile(profile = {}) {
 function normalizePreferences(preferences = {}) {
   const theme = typeof preferences.theme === 'string' ? preferences.theme : 'system';
   const normalizedTheme = ['light', 'dark', 'system'].includes(theme) ? theme : 'system';
-  const security = preferences.security && typeof preferences.security === 'object' ? preferences.security : {};
 
   return {
     ...makeDefaultData().preferences,
     ...(preferences && typeof preferences === 'object' ? preferences : {}),
     theme: normalizedTheme,
-    security: {
-      lockEnabled: Boolean(security.lockEnabled),
-      passwordHash: typeof security.passwordHash === 'string' ? security.passwordHash : '',
-    },
   };
 }
 
@@ -729,7 +651,6 @@ async function load() {
   els.connectEnabled.checked = Boolean(state.data.connections.enabled);
   els.connectDisplayName.value = state.data.connections.displayName || state.data.profile.name || '';
   els.signalingEndpoint.value = state.data.connections.signalingEndpoint || '';
-  syncSecurityControls();
   renderDirectNotesList();
   renderConnectionStatus(state.data.connections.enabled ? 'Connection feature is enabled.' : 'Connection disabled.');
 }
@@ -1669,75 +1590,6 @@ els.themeSelect.addEventListener('change', () => {
     draft.preferences.theme = els.themeSelect.value;
   }, { render: false });
   applyTheme(state.data.preferences.theme);
-});
-
-els.appLockPasswordBtn.addEventListener('click', () => {
-  void (async () => {
-    const nextPassword = await promptNewLockPassword();
-    if (!nextPassword) return;
-    const hash = await sha256Hex(nextPassword);
-    updateState((draft) => {
-      draft.preferences.security.lockEnabled = true;
-      draft.preferences.security.passwordHash = hash;
-    }, { render: false });
-    syncSecurityControls();
-    toast('App lock password saved.');
-  })();
-});
-
-els.appLockEnabled.addEventListener('change', () => {
-  void (async () => {
-    const wantsEnabled = els.appLockEnabled.checked;
-    const security = getSecurityPrefs();
-
-    if (wantsEnabled && !security.passwordHash) {
-      const nextPassword = await promptNewLockPassword();
-      if (!nextPassword) {
-        syncSecurityControls();
-        return;
-      }
-      const hash = await sha256Hex(nextPassword);
-      updateState((draft) => {
-        draft.preferences.security.lockEnabled = true;
-        draft.preferences.security.passwordHash = hash;
-      }, { render: false });
-      syncSecurityControls();
-      toast('App lock enabled.');
-      return;
-    }
-
-    if (!wantsEnabled && security.lockEnabled) {
-      const entered = await showModalMessage({
-        title: 'Disable app lock',
-        message: 'Enter your current password to disable app lock.',
-        confirmText: 'Disable',
-        cancelText: 'Cancel',
-        showCancel: true,
-        input: { placeholder: 'Current password', defaultValue: '' },
-      });
-      if (!entered) {
-        syncSecurityControls();
-        return;
-      }
-      const valid = await verifyLockPassword(entered);
-      if (!valid) {
-        toast('Incorrect password. App lock stays enabled.', 'error');
-        syncSecurityControls();
-        return;
-      }
-      updateState((draft) => {
-        draft.preferences.security.lockEnabled = false;
-      }, { render: false });
-      syncSecurityControls();
-      toast('App lock disabled.');
-      return;
-    }
-
-    updateState((draft) => {
-      draft.preferences.security.lockEnabled = wantsEnabled;
-    }, { render: false });
-    syncSecurityControls();
-  })();
 });
 
 window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
@@ -2779,39 +2631,6 @@ els.importFile.addEventListener('change', (event) => {
   handleImportFile(event, 'auto');
 });
 
-async function requireAppUnlockIfNeeded() {
-  const { lockEnabled, passwordHash } = getSecurityPrefs();
-  if (!lockEnabled || !passwordHash) {
-    unlockUi();
-    return;
-  }
-
-  lockUi();
-  els.lockError.classList.add('hidden');
-  els.lockPasswordInput.value = '';
-  els.lockScreen.classList.remove('hidden');
-  els.lockPasswordInput.focus();
-
-  await new Promise((resolve) => {
-    const onSubmit = async (event) => {
-      event.preventDefault();
-      const candidate = els.lockPasswordInput.value || '';
-      const isValid = await verifyLockPassword(candidate);
-      if (!isValid) {
-        els.lockError.classList.remove('hidden');
-        els.lockPasswordInput.select();
-        return;
-      }
-      els.lockForm.removeEventListener('submit', onSubmit);
-      resolve();
-    };
-    els.lockForm.addEventListener('submit', onSubmit);
-  });
-
-  els.lockScreen.classList.add('hidden');
-  unlockUi();
-}
-
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('sw.js').catch(() => {});
 }
@@ -2829,7 +2648,6 @@ async function init() {
   renderDirectNotesList();
   renderPostPeopleMenu();
   renderPosts();
-  await requireAppUnlockIfNeeded();
 }
 
 init();
