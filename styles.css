@@ -178,7 +178,29 @@ textarea:focus-visible, input:focus-visible, select:focus-visible {
 .people-empty { color: var(--text-2); font-size: 13px; margin: 2px 0; }
 
 .feed { display: flex; flex-direction: column; gap: var(--space-3); }
+.compose-actions { display: flex; gap: 10px; flex-wrap: wrap; }
 .compose-launch { align-self: flex-start; }
+.spending-dashboard {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+.spending-stat {
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 12px;
+}
+.spending-stat h3 {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-2);
+}
+.spending-stat p {
+  margin: 6px 0 0;
+  font-size: 24px;
+  font-weight: 800;
+}
 .composer { padding: var(--space-3); }
 .composer textarea, .filters input, .filters select, .composer input {
   border: 1px solid var(--border);
@@ -410,6 +432,64 @@ textarea:focus-visible, input:focus-visible, select:focus-visible {
 .compose-people-panel {
   margin: 0;
 }
+.vibe-check-panel {
+  width: min(560px, 100%);
+}
+.vibe-check-progress {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.vibe-step-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  background: var(--border);
+}
+.vibe-step-dot.active {
+  background: var(--accent);
+}
+.vibe-check-form {
+  display: grid;
+  gap: 10px;
+}
+.vibe-step h3 {
+  margin: 0 0 4px;
+}
+.vibe-help {
+  margin: 0 0 10px;
+  font-size: 13px;
+  color: var(--text-2);
+}
+.vibe-mood-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+.vibe-mood-grid label {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 9px 10px;
+  background: var(--surface-2);
+}
+.vibe-slider-wrap {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+.vibe-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 8px;
+}
+.cha-ching-form {
+  display: grid;
+  gap: 4px;
+}
 
 .message-modal {
   position: fixed;
@@ -503,6 +583,12 @@ textarea:focus-visible, input:focus-visible, select:focus-visible {
   .composer-row,
   .filters,
   .comment-form {
+    grid-template-columns: 1fr;
+  }
+  .spending-dashboard {
+    grid-template-columns: 1fr;
+  }
+  .vibe-mood-grid {
     grid-template-columns: 1fr;
   }
 
