@@ -203,6 +203,7 @@ textarea:focus-visible, input:focus-visible, select:focus-visible {
 .post { padding: var(--space-3); }
 .post-head { display: flex; align-items: center; gap: var(--space-2); }
 .post-author { font-weight: 800; }
+.post-imported-from { font-weight: 500; font-size: 12px; color: var(--text-2); }
 .post-date { font-size: 13px; color: var(--text-2); }
 .post-menu-wrap { margin-left: auto; }
 .action-btn {
@@ -560,22 +561,25 @@ textarea:focus-visible, input:focus-visible, select:focus-visible {
   color: var(--danger);
 }
 
-.connected-peers {
-  margin-top: 8px;
+.direct-notes-list {
   display: grid;
-  gap: 6px;
+  gap: 8px;
 }
-.connected-peer {
-  border: 1px solid var(--border);
-  background: var(--surface-1);
-  border-radius: 8px;
-  padding: 6px 8px;
+
+.direct-notes-empty,
+.direct-note-summary {
+  margin: 0;
   font-size: 12px;
-}
-.connected-peer strong {
-  display: block;
-  color: var(--text-1);
-}
-.connected-peer span {
   color: var(--text-2);
+}
+
+.direct-note-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px;
+  background: var(--surface);
 }

@@ -1,8 +1,14 @@
 const STORAGE_KEY_V3 = 'mybook_v3';
 const STORAGE_KEY_V2 = 'mybook_v2';
+const MEDIA_DB_NAME = 'mybook_media_v1';
+const MEDIA_DB_VERSION = 1;
+const MEDIA_STORE = 'media';
 const MAX_IMAGE_DIMENSION = 1600;
 const IMAGE_OUTPUT_QUALITY = 0.82;
 const MAX_VIDEO_FILE_BYTES = 12 * 1024 * 1024;
+const MAX_MEDIA_FILE_BYTES = 12 * 1024 * 1024;
+const MAX_TOTAL_MEDIA_BYTES = 250 * 1024 * 1024;
+const STORAGE_HEADROOM_BYTES = 8 * 1024 * 1024;
 const PROTOCOL_VERSION = 1;
 const DEFAULT_ICE_SERVERS = [{ urls: 'stun:stun.l.google.com:19302' }];
 
@@ -34,6 +40,7 @@ const els = {
   personNameInput: document.getElementById('personNameInput'),
   personRelationshipInput: document.getElementById('personRelationshipInput'),
   personPicInput: document.getElementById('personPicInput'),
+  deletePersonBtn: document.getElementById('deletePersonBtn'),
   savePersonBtn: document.getElementById('savePersonBtn'),
   filterModal: document.getElementById('filterModal'),
   filterModalCloseBtn: document.getElementById('filterModalCloseBtn'),
@@ -59,8 +66,8 @@ const els = {
   startJoinBtn: document.getElementById('startJoinBtn'),
   inviteCodeInput: document.getElementById('inviteCodeInput'),
   applyCodeBtn: document.getElementById('applyCodeBtn'),
+  directNotesList: document.getElementById('directNotesList'),
   connectStatus: document.getElementById('connectStatus'),
-  connectedPeers: document.getElementById('connectedPeers'),
   accountMenuBtn: document.getElementById('accountMenuBtn'),
   accountMenu: document.getElementById('accountMenu'),
   messageModal: document.getElementById('messageModal'),
@@ -74,9 +81,12 @@ const els = {
 const state = {
   data: makeDefaultData(),
   pendingMedia: [],
+  mediaDb: null,
+  activeObjectUrls: new Set(),
   selectedPostPeople: [],
   activeFilters: { tags: [], peopleIds: [] },
   pendingPersonAvatarDataUrl: '',
+  editingPersonId: '',
   connectionRuntime: {
     mode: '',
     signalingRole: '',
@@ -104,12 +114,161 @@ function makeDefaultData() {
       displayName: '',
       signalingEndpoint: '',
       peersById: {},
+      directNotesByPeerId: {},
     },
   };
 }
 
 function deepCopy(value) {
   return JSON.parse(JSON.stringify(value));
+}
+
+function openMediaDb() {
+  if (!('indexedDB' in window)) return Promise.reject(new Error('indexeddb-unavailable'));
+  if (state.mediaDb) return Promise.resolve(state.mediaDb);
+
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(MEDIA_DB_NAME, MEDIA_DB_VERSION);
+    request.onerror = () => reject(request.error || new Error('indexeddb-open-failed'));
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains(MEDIA_STORE)) {
+        db.createObjectStore(MEDIA_STORE, { keyPath: 'mediaId' });
+      }
+    };
+    request.onsuccess = () => {
+      state.mediaDb = request.result;
+      resolve(state.mediaDb);
+    };
+  });
+}
+
+function runMediaStore(mode, worker) {
+  return openMediaDb().then((db) => new Promise((resolve, reject) => {
+    const tx = db.transaction(MEDIA_STORE, mode);
+    const store = tx.objectStore(MEDIA_STORE);
+    let settled = false;
+    const finishResolve = (value) => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
+    const finishReject = (error) => {
+      if (settled) return;
+      settled = true;
+      reject(error);
+    };
+    const result = worker(store, tx);
+    if (result && typeof result.then === 'function') {
+      result.then(finishResolve).catch(finishReject);
+    } else {
+      tx.oncomplete = () => finishResolve(result);
+    }
+    tx.onerror = () => finishReject(tx.error || new Error('indexeddb-transaction-failed'));
+    tx.onabort = () => finishReject(tx.error || new Error('indexeddb-transaction-aborted'));
+  }));
+}
+
+async function getMediaUsageBytes() {
+  return runMediaStore('readonly', (store) => new Promise((resolve, reject) => {
+    let total = 0;
+    const request = store.openCursor();
+    request.onerror = () => reject(request.error || new Error('indexeddb-cursor-failed'));
+    request.onsuccess = () => {
+      const cursor = request.result;
+      if (!cursor) {
+        resolve(total);
+        return;
+      }
+      total += Number(cursor.value?.size || cursor.value?.blob?.size || 0);
+      cursor.continue();
+    };
+  }));
+}
+
+async function warnIfStorageNearLimit(incomingBytes = 0) {
+  if (!navigator.storage?.estimate) return;
+  try {
+    const estimate = await navigator.storage.estimate();
+    const used = Number(estimate.usage || 0);
+    const quota = Number(estimate.quota || 0);
+    if (!quota) return;
+    const projected = used + incomingBytes + STORAGE_HEADROOM_BYTES;
+    if (projected >= quota) {
+      toast('Storage is nearly full. Delete old memories or media before adding more.', 'warn');
+    }
+  } catch {
+    // ignore estimate failures
+  }
+}
+
+async function assertMediaWriteCapacity(incomingBytes = 0) {
+  if (incomingBytes > MAX_MEDIA_FILE_BYTES) throw new Error('media-too-large');
+  const usedMediaBytes = await getMediaUsageBytes();
+  if (usedMediaBytes + incomingBytes > MAX_TOTAL_MEDIA_BYTES) throw new Error('media-budget-exceeded');
+  await warnIfStorageNearLimit(incomingBytes);
+}
+
+async function putMediaBlob({ mediaId, blob, type, name }) {
+  const resolvedBlob = blob instanceof Blob ? blob : null;
+  if (!resolvedBlob) throw new Error('invalid-media-blob');
+  await assertMediaWriteCapacity(resolvedBlob.size);
+  const nextMediaId = typeof mediaId === 'string' && mediaId ? mediaId : crypto.randomUUID();
+  const entry = {
+    mediaId: nextMediaId,
+    blob: resolvedBlob,
+    type: type === 'video' ? 'video' : 'image',
+    name: typeof name === 'string' && name ? name : (type === 'video' ? 'video' : 'image'),
+    size: resolvedBlob.size,
+    createdAt: new Date().toISOString(),
+  };
+  await runMediaStore('readwrite', (store) => {
+    store.put(entry);
+  });
+  return {
+    mediaId: entry.mediaId,
+    type: entry.type,
+    name: entry.name,
+  };
+}
+
+async function getMediaBlob(mediaId) {
+  if (typeof mediaId !== 'string' || !mediaId) return null;
+  return runMediaStore('readonly', (store) => new Promise((resolve, reject) => {
+    const request = store.get(mediaId);
+    request.onerror = () => reject(request.error || new Error('indexeddb-get-failed'));
+    request.onsuccess = () => resolve(request.result || null);
+  }));
+}
+
+function revokeAllObjectUrls() {
+  state.activeObjectUrls.forEach((url) => URL.revokeObjectURL(url));
+  state.activeObjectUrls.clear();
+}
+
+async function persistPostMediaRefs(mediaItems = []) {
+  const refs = [];
+  for (const item of mediaItems) {
+    if (!item || (item.type !== 'image' && item.type !== 'video')) continue;
+    if (item.mediaId) {
+      refs.push({
+        mediaId: item.mediaId,
+        type: item.type,
+        name: item.name || (item.type === 'video' ? 'video' : 'image'),
+      });
+      continue;
+    }
+    if (typeof item.dataUrl === 'string' && item.dataUrl.startsWith('data:')) {
+      const blob = dataUrlToBlob(item.dataUrl);
+      const ref = await putMediaBlob({
+        blob,
+        type: item.type,
+        name: item.name,
+      });
+      refs.push(ref);
+    }
+  }
+  return refs;
 }
 
 function openModalOverlay(modalEl) {
@@ -267,7 +426,12 @@ function normalizePreferences(preferences = {}) {
 
 function normalizeConnections(connections = {}) {
   const incomingPeers = connections.peersById && typeof connections.peersById === 'object' ? connections.peersById : {};
+  const incomingDirectNotes = connections.directNotesByPeerId && typeof connections.directNotesByPeerId === 'object'
+    ? connections.directNotesByPeerId
+    : {};
   const peersById = {};
+  const directNotesByPeerId = {};
+  const identity = connections.identity && typeof connections.identity === 'object' ? connections.identity : {};
 
   Object.keys(incomingPeers).forEach((peerId) => {
     const peer = incomingPeers[peerId] || {};
@@ -276,6 +440,25 @@ function normalizeConnections(connections = {}) {
       displayName: typeof peer.displayName === 'string' ? peer.displayName : '',
       trustState: ['pending', 'trusted', 'blocked'].includes(peer.trustState) ? peer.trustState : 'pending',
       lastSyncAt: typeof peer.lastSyncAt === 'string' ? peer.lastSyncAt : '',
+      publicKeyJwk: peer.publicKeyJwk && typeof peer.publicKeyJwk === 'object' ? peer.publicKeyJwk : null,
+    };
+  });
+
+  Object.keys(incomingDirectNotes).forEach((peerId) => {
+    const thread = incomingDirectNotes[peerId] && typeof incomingDirectNotes[peerId] === 'object' ? incomingDirectNotes[peerId] : {};
+    const incomingMessages = Array.isArray(thread.messages) ? thread.messages : [];
+    directNotesByPeerId[peerId] = {
+      threadId: typeof thread.threadId === 'string' && thread.threadId ? thread.threadId : `direct-${peerId}`,
+      type: 'direct-notes',
+      peerId,
+      messages: incomingMessages.map((message) => ({
+        id: typeof message.id === 'string' && message.id ? message.id : crypto.randomUUID(),
+        text: typeof message.text === 'string' ? message.text : '',
+        createdAt: typeof message.createdAt === 'string' ? message.createdAt : new Date().toISOString(),
+        authorId: typeof message.authorId === 'string' ? message.authorId : '',
+        authorName: typeof message.authorName === 'string' ? message.authorName : '',
+        authorAvatar: typeof message.authorAvatar === 'string' ? message.authorAvatar : '',
+      })).filter((message) => message.text.trim()),
     };
   });
 
@@ -285,6 +468,12 @@ function normalizeConnections(connections = {}) {
     displayName: typeof connections.displayName === 'string' ? connections.displayName : '',
     signalingEndpoint: typeof connections.signalingEndpoint === 'string' ? connections.signalingEndpoint : '',
     peersById,
+    directNotesByPeerId,
+    identity: {
+      publicKeyJwk: identity.publicKeyJwk && typeof identity.publicKeyJwk === 'object' ? identity.publicKeyJwk : null,
+      privateKeyJwk: identity.privateKeyJwk && typeof identity.privateKeyJwk === 'object' ? identity.privateKeyJwk : null,
+      generatedAt: typeof identity.generatedAt === 'string' ? identity.generatedAt : '',
+    },
   };
 }
 
@@ -294,10 +483,62 @@ function normalizeComment(comment = {}) {
     text: typeof comment.text === 'string' ? comment.text : '',
     createdAt: typeof comment.createdAt === 'string' ? comment.createdAt : new Date().toISOString(),
     updatedAt: typeof comment.updatedAt === 'string' ? comment.updatedAt : undefined,
+    authorId: typeof comment.authorId === 'string' ? comment.authorId : '',
+    authorName: typeof comment.authorName === 'string' ? comment.authorName : '',
+    authorAvatar: typeof comment.authorAvatar === 'string' ? comment.authorAvatar : '',
   };
 }
 
+function normalizeReactions(reactions, liked) {
+  const normalized = {};
+  if (reactions && typeof reactions === 'object' && !Array.isArray(reactions)) {
+    Object.keys(reactions).forEach((actorId) => {
+      const reaction = reactions[actorId] && typeof reactions[actorId] === 'object' ? reactions[actorId] : {};
+      if (!actorId) return;
+      normalized[actorId] = {
+        actorId,
+        authorName: typeof reaction.authorName === 'string' ? reaction.authorName : '',
+        authorAvatar: typeof reaction.authorAvatar === 'string' ? reaction.authorAvatar : '',
+        createdAt: typeof reaction.createdAt === 'string' ? reaction.createdAt : new Date().toISOString(),
+      };
+    });
+  } else if (liked) {
+    normalized.self = {
+      actorId: 'self',
+      authorName: 'You',
+      authorAvatar: '',
+      createdAt: new Date().toISOString(),
+    };
+  }
+  return normalized;
+}
+
 function normalizePost(post = {}) {
+  const importedFrom = post.importedFrom && typeof post.importedFrom === 'object' ? post.importedFrom : null;
+  const normalizedMedia = Array.isArray(post.media)
+    ? post.media
+      .map((m) => {
+        if (!m || (m.type !== 'image' && m.type !== 'video')) return null;
+        if (typeof m.mediaId === 'string' && m.mediaId) {
+          return {
+            mediaId: m.mediaId,
+            type: m.type,
+            name: typeof m.name === 'string' ? m.name : (m.type === 'video' ? 'video' : 'image'),
+          };
+        }
+        if (typeof m.dataUrl === 'string' && m.dataUrl.startsWith('data:')) {
+          return {
+            mediaId: '',
+            dataUrl: m.dataUrl,
+            type: m.type,
+            name: typeof m.name === 'string' ? m.name : (m.type === 'video' ? 'video' : 'image'),
+          };
+        }
+        return null;
+      })
+      .filter(Boolean)
+    : [];
+
   return {
     id: typeof post.id === 'string' ? post.id : crypto.randomUUID(),
     text: typeof post.text === 'string' ? post.text : '',
@@ -306,15 +547,16 @@ function normalizePost(post = {}) {
     updatedAt: typeof post.updatedAt === 'string' ? post.updatedAt : undefined,
     tags: Array.isArray(post.tags) ? post.tags.filter((tag) => typeof tag === 'string').map((tag) => tag.trim()).filter(Boolean) : [],
     peopleIds: Array.isArray(post.peopleIds) ? post.peopleIds.filter((id) => typeof id === 'string') : [],
-    media: Array.isArray(post.media)
-      ? post.media.filter((m) => m && typeof m.dataUrl === 'string' && (m.type === 'image' || m.type === 'video')).map((m) => ({
-        dataUrl: m.dataUrl,
-        type: m.type,
-        name: typeof m.name === 'string' ? m.name : (m.type === 'video' ? 'video' : 'image'),
-      }))
-      : [],
-    liked: Boolean(post.liked),
+    media: normalizedMedia,
+    reactions: normalizeReactions(post.reactions, post.liked),
     comments: Array.isArray(post.comments) ? post.comments.map(normalizeComment).filter((c) => c.text.trim()) : [],
+    importedFrom: importedFrom
+      ? {
+        senderId: typeof importedFrom.senderId === 'string' ? importedFrom.senderId : '',
+        displayName: typeof importedFrom.displayName === 'string' ? importedFrom.displayName : '',
+        exportedAt: typeof importedFrom.exportedAt === 'string' ? importedFrom.exportedAt : '',
+      }
+      : null,
   };
 }
 
@@ -409,8 +651,34 @@ async function load() {
   els.connectEnabled.checked = Boolean(state.data.connections.enabled);
   els.connectDisplayName.value = state.data.connections.displayName || state.data.profile.name || '';
   els.signalingEndpoint.value = state.data.connections.signalingEndpoint || '';
+  renderDirectNotesList();
   renderConnectionStatus(state.data.connections.enabled ? 'Connection feature is enabled.' : 'Connection disabled.');
-  renderConnectedPeers();
+}
+
+async function migrateLegacyMediaToIndexedDb() {
+  const postIds = state.data.postOrder.filter((id) => state.data.postsById[id]);
+  for (const postId of postIds) {
+    const post = state.data.postsById[postId];
+    const needsMigration = (post.media || []).some((item) => item && typeof item.dataUrl === 'string' && item.dataUrl.startsWith('data:'));
+    if (!needsMigration) continue;
+
+    try {
+      const refs = await persistPostMediaRefs(post.media || []);
+      updateState((draft) => {
+        if (!draft.postsById[postId]) return;
+        draft.postsById[postId].media = refs;
+        draft.postsById[postId].updatedAt = new Date().toISOString();
+      }, { render: false });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    } catch (error) {
+      if (error && (error.message === 'media-budget-exceeded' || error.message === 'media-too-large')) {
+        toast('Some older media could not be migrated due to storage limits.', 'warn');
+        return;
+      }
+      toast('Some older media could not be migrated on this device.', 'warn');
+      return;
+    }
+  }
 }
 
 function initials(name) {
@@ -420,6 +688,21 @@ function initials(name) {
     .slice(0, 2)
     .map((chunk) => chunk[0].toUpperCase())
     .join('') || 'M';
+}
+
+function getLocalActorMeta() {
+  return {
+    actorId: state.data.connections.peerId || 'self',
+    authorName: state.data.connections.displayName || state.data.profile.name || 'Mybook User',
+    authorAvatar: state.data.profile.avatarDataUrl || '',
+  };
+}
+
+function resolveActorName(actorId, fallbackName = '') {
+  if (!actorId || actorId === 'self') return state.data.connections.displayName || state.data.profile.name || 'Mybook User';
+  if (actorId === state.data.connections.peerId) return state.data.connections.displayName || state.data.profile.name || 'Mybook User';
+  const peer = state.data.connections.peersById[actorId];
+  return fallbackName || peer?.displayName || actorId;
 }
 
 function renderAvatar() {
@@ -454,16 +737,16 @@ function getPostTimestamp(post) {
   return new Date(post.createdAt).getTime();
 }
 
-function fileToDataUrl(file) {
+function processMediaFile(file) {
   if (file.type.startsWith('image/')) {
-    return optimizeImageFile(file);
+    return optimizeImageBlob(file);
   }
 
   if (file.type.startsWith('video/')) {
     if (file.size > MAX_VIDEO_FILE_BYTES) {
       return Promise.reject(new Error('video-too-large'));
     }
-    return readRawFileDataUrl(file, 'video');
+    return Promise.resolve({ blob: file, type: 'video', name: file.name });
   }
 
   return Promise.reject(new Error('unsupported-file-type'));
@@ -510,6 +793,48 @@ function optimizeImageFile(file) {
   });
 }
 
+function optimizeImageBlob(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('image-read-failed'));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error('image-decode-failed'));
+      img.onload = () => {
+        const scale = Math.min(1, MAX_IMAGE_DIMENSION / Math.max(img.width, img.height));
+        const width = Math.max(1, Math.round(img.width * scale));
+        const height = Math.max(1, Math.round(img.height * scale));
+
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          reject(new Error('canvas-unavailable'));
+          return;
+        }
+
+        ctx.drawImage(img, 0, 0, width, height);
+        canvas.toBlob((blob) => {
+          if (!blob) {
+            reject(new Error('image-encode-failed'));
+            return;
+          }
+          resolve({ blob, type: 'image', name: file.name });
+        }, 'image/jpeg', IMAGE_OUTPUT_QUALITY);
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+function fileToDataUrl(file) {
+  if (!file.type.startsWith('image/')) return Promise.reject(new Error('video-too-large'));
+  return optimizeImageFile(file);
+}
+
 function renderMediaPreview() {
   els.mediaPreview.innerHTML = '';
   state.pendingMedia.forEach((item) => {
@@ -554,6 +879,7 @@ function renderPeopleList() {
   state.data.people.forEach((person) => {
     const row = document.createElement('div');
     row.className = 'person-row';
+    row.tabIndex = 0;
     const avatar = document.createElement('div');
     avatar.className = 'person-avatar';
     if (person.avatarDataUrl) avatar.style.backgroundImage = `url("${person.avatarDataUrl}")`;
@@ -561,8 +887,61 @@ function renderPeopleList() {
     const text = document.createElement('div');
     text.innerHTML = `<strong>${person.name}</strong><span>${person.relationship}</span>`;
     row.append(avatar, text);
+    let longPressTimer = 0;
+    let longPressHandled = false;
+    const clearLongPressTimer = () => {
+      if (longPressTimer) {
+        window.clearTimeout(longPressTimer);
+        longPressTimer = 0;
+      }
+    };
+    const startLongPress = () => {
+      clearLongPressTimer();
+      longPressHandled = false;
+      longPressTimer = window.setTimeout(() => {
+        longPressHandled = true;
+        openPersonModal(person);
+      }, 500);
+    };
+    row.addEventListener('pointerdown', (event) => {
+      if (event.button !== 0) return;
+      startLongPress();
+    });
+    row.addEventListener('pointerup', clearLongPressTimer);
+    row.addEventListener('pointercancel', clearLongPressTimer);
+    row.addEventListener('pointerleave', clearLongPressTimer);
+    row.addEventListener('contextmenu', (event) => {
+      event.preventDefault();
+      clearLongPressTimer();
+      openPersonModal(person);
+    });
+    row.addEventListener('click', (event) => {
+      if (longPressHandled) {
+        event.preventDefault();
+        longPressHandled = false;
+      }
+    });
+    row.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        openPersonModal(person);
+      }
+    });
     els.peopleList.append(row);
   });
+}
+
+function openPersonModal(person = null) {
+  state.pendingPersonAvatarDataUrl = person?.avatarDataUrl || '';
+  state.editingPersonId = person?.id || '';
+  els.personNameInput.value = person?.name || '';
+  els.personRelationshipInput.value = person?.relationship || '';
+  els.personPicInput.value = '';
+  const title = document.getElementById('personModalTitle');
+  title.textContent = person ? 'Edit person' : 'Add person';
+  els.savePersonBtn.textContent = person ? 'Save changes' : 'Save person';
+  els.deletePersonBtn.classList.toggle('hidden', !person);
+  openModalOverlay(els.personModal);
 }
 
 function renderPostPeopleMenu() {
@@ -637,6 +1016,7 @@ function closeAccountMenu() {
 
 function renderPosts() {
   const filtered = getVisiblePosts();
+  revokeAllObjectUrls();
 
   els.feedList.innerHTML = '';
   els.emptyState.classList.toggle('hidden', filtered.length > 0);
@@ -655,7 +1035,16 @@ function renderPosts() {
       miniAvatar.style.backgroundPosition = '';
       miniAvatar.textContent = initials(state.data.profile.name);
     }
-    node.querySelector('.post-author').textContent = state.data.profile.name;
+    const authorEl = node.querySelector('.post-author');
+    const senderMeta = post.importedFrom;
+    authorEl.textContent = state.data.profile.name;
+    if (senderMeta?.senderId) {
+      const senderLine = document.createElement('div');
+      senderLine.className = 'post-imported-from';
+      const senderDate = senderMeta.exportedAt ? ` • ${formatDate(senderMeta.exportedAt)}` : '';
+      senderLine.textContent = `Shared by ${senderMeta.displayName || 'Unknown'} (${senderMeta.senderId})${senderDate}`;
+      authorEl.append(document.createElement('br'), senderLine);
+    }
     node.querySelector('.post-date').textContent = formatDate(post.date || post.createdAt);
     node.querySelector('.post-text').textContent = post.text;
 
@@ -665,12 +1054,7 @@ function renderPosts() {
     const postEditDateInput = node.querySelector('.post-edit-date-input');
 
     const mediaHost = node.querySelector('.post-media');
-    (post.media || []).forEach((m) => {
-      const mediaEl = document.createElement(m.type === 'video' ? 'video' : 'img');
-      mediaEl.src = m.dataUrl;
-      if (m.type === 'video') mediaEl.controls = true;
-      mediaHost.append(mediaEl);
-    });
+    void renderPostMedia(post, mediaHost);
 
     const tagList = node.querySelector('.tag-list');
     (post.tags || []).forEach((tag) => {
@@ -689,11 +1073,28 @@ function renderPosts() {
     });
 
     const likeBtn = node.querySelector('.like-btn');
-    likeBtn.classList.toggle('active', !!post.liked);
-    likeBtn.textContent = post.liked ? '👍 Liked' : '👍 Like';
+    const actor = getLocalActorMeta();
+    const reactions = post.reactions && typeof post.reactions === 'object' ? post.reactions : {};
+    const reactedByMe = Boolean(reactions[actor.actorId] || reactions.self);
+    likeBtn.classList.toggle('active', reactedByMe);
+    const reactionActors = Object.values(reactions).map((reaction) => resolveActorName(reaction.actorId, reaction.authorName)).filter(Boolean);
+    likeBtn.textContent = reactionActors.length ? `👍 ${reactionActors.join(', ')}` : '👍 Like';
     likeBtn.addEventListener('click', () => {
       updateState((draft) => {
-        draft.postsById[post.id].liked = !draft.postsById[post.id].liked;
+        const draftPost = draft.postsById[post.id];
+        const draftReactions = draftPost.reactions && typeof draftPost.reactions === 'object' ? draftPost.reactions : {};
+        if (draftReactions[actor.actorId] || draftReactions.self) {
+          delete draftReactions[actor.actorId];
+          delete draftReactions.self;
+        } else {
+          draftReactions[actor.actorId] = {
+            actorId: actor.actorId,
+            authorName: actor.authorName,
+            authorAvatar: actor.authorAvatar,
+            createdAt: new Date().toISOString(),
+          };
+        }
+        draftPost.reactions = draftReactions;
       });
     });
 
@@ -719,7 +1120,7 @@ function renderPosts() {
         return;
       }
 
-      downloadMemoryShare(post);
+      await downloadMemoryShare(post);
       toast('Memory share JSON downloaded.');
     });
 
@@ -793,7 +1194,7 @@ function renderPosts() {
       item.classList.remove('comment-template', 'hidden');
 
       const author = item.querySelector('.comment-author');
-      author.textContent = state.data.profile.name;
+      author.textContent = `${resolveActorName(comment.authorId, comment.authorName)} • ${formatDate(comment.createdAt)}`;
 
       const text = item.querySelector('.comment-text');
       text.textContent = comment.text;
@@ -858,6 +1259,9 @@ function renderPosts() {
         id: crypto.randomUUID(),
         text,
         createdAt: new Date().toISOString(),
+        authorId: actor.actorId,
+        authorName: actor.authorName,
+        authorAvatar: actor.authorAvatar,
       };
 
       updateState((draft) => {
@@ -870,6 +1274,26 @@ function renderPosts() {
 
     els.feedList.append(node);
   });
+}
+
+async function renderPostMedia(post, mediaHost) {
+  const mediaItems = Array.isArray(post.media) ? post.media : [];
+  for (const mediaRef of mediaItems) {
+    const mediaEl = document.createElement(mediaRef.type === 'video' ? 'video' : 'img');
+    if (mediaRef?.mediaId) {
+      const stored = await getMediaBlob(mediaRef.mediaId);
+      if (!stored?.blob) continue;
+      const objectUrl = URL.createObjectURL(stored.blob);
+      state.activeObjectUrls.add(objectUrl);
+      mediaEl.src = objectUrl;
+    } else if (mediaRef?.dataUrl) {
+      mediaEl.src = mediaRef.dataUrl;
+    } else {
+      continue;
+    }
+    if (mediaRef.type === 'video') mediaEl.controls = true;
+    mediaHost.append(mediaEl);
+  }
 }
 
 els.profileName.addEventListener('input', () => {
@@ -910,7 +1334,7 @@ els.profilePicInput.addEventListener('change', async (event) => {
 els.postMedia.addEventListener('change', async (event) => {
   const files = Array.from(event.target.files || []).slice(0, 8);
   try {
-    const processed = await Promise.all(files.map(fileToDataUrl));
+    const processed = await Promise.all(files.map(processMediaFile));
     state.pendingMedia = processed;
     renderMediaPreview();
   } catch (error) {
@@ -926,10 +1350,24 @@ els.postMedia.addEventListener('change', async (event) => {
   }
 });
 
-els.postForm.addEventListener('submit', (event) => {
+els.postForm.addEventListener('submit', async (event) => {
   event.preventDefault();
   const text = els.postText.value.trim();
   if (!text && state.pendingMedia.length === 0) return;
+
+  let mediaRefs = [];
+  try {
+    mediaRefs = await Promise.all(state.pendingMedia.map((item) => putMediaBlob(item)));
+  } catch (error) {
+    if (error && error.message === 'media-budget-exceeded') {
+      toast('Media storage limit reached. Remove older memories with media first.', 'warn');
+    } else if (error && error.message === 'media-too-large') {
+      toast('One file is too large. Keep each media file under 12 MB.', 'warn');
+    } else {
+      toast('Could not store media on this device. Try smaller files.', 'error');
+    }
+    return;
+  }
 
   const post = normalizePost({
     id: crypto.randomUUID(),
@@ -938,8 +1376,8 @@ els.postForm.addEventListener('submit', (event) => {
     createdAt: new Date().toISOString(),
     tags: els.postTags.value.split(',').map((tag) => tag.trim()).filter(Boolean),
     peopleIds: state.selectedPostPeople,
-    media: state.pendingMedia,
-    liked: false,
+    media: mediaRefs,
+    reactions: {},
     comments: [],
   });
 
@@ -975,11 +1413,7 @@ els.postPeopleBtn.addEventListener('click', () => {
 });
 
 els.addPersonBtn.addEventListener('click', () => {
-  state.pendingPersonAvatarDataUrl = '';
-  els.personNameInput.value = '';
-  els.personRelationshipInput.value = '';
-  els.personPicInput.value = '';
-  openModalOverlay(els.personModal);
+  openPersonModal();
 });
 
 els.openComposeBtn.addEventListener('click', openComposeModal);
@@ -1012,6 +1446,14 @@ els.savePersonBtn.addEventListener('click', () => {
     return;
   }
   updateState((draft) => {
+    if (state.editingPersonId) {
+      const person = draft.people.find((item) => item.id === state.editingPersonId);
+      if (!person) return;
+      person.name = name;
+      person.relationship = relationship;
+      person.avatarDataUrl = state.pendingPersonAvatarDataUrl;
+      return;
+    }
     draft.people.push({
       id: crypto.randomUUID(),
       name,
@@ -1022,7 +1464,35 @@ els.savePersonBtn.addEventListener('click', () => {
   renderPeopleList();
   renderPostPeopleMenu();
   renderFilterPeopleList();
+  state.editingPersonId = '';
   closeModalOverlay(els.personModal);
+});
+
+els.deletePersonBtn.addEventListener('click', async () => {
+  if (!state.editingPersonId) return;
+  const confirmed = await showModalMessage({
+    title: 'Delete person',
+    message: 'Remove this person from your People list and untag them from all memories?',
+    confirmText: 'Delete',
+    cancelText: 'Cancel',
+    showCancel: true,
+  });
+  if (!confirmed) return;
+  const personId = state.editingPersonId;
+  updateState((draft) => {
+    draft.people = draft.people.filter((person) => person.id !== personId);
+    Object.values(draft.postsById).forEach((post) => {
+      post.peopleIds = (post.peopleIds || []).filter((id) => id !== personId);
+    });
+  }, { render: false });
+  state.selectedPostPeople = state.selectedPostPeople.filter((id) => id !== personId);
+  state.activeFilters.peopleIds = state.activeFilters.peopleIds.filter((id) => id !== personId);
+  state.editingPersonId = '';
+  closeModalOverlay(els.personModal);
+  renderPeopleList();
+  renderPostPeopleMenu();
+  renderFilterPeopleList();
+  renderPosts();
 });
 
 els.openFilterBtn.addEventListener('click', () => {
@@ -1089,7 +1559,6 @@ els.connectEnabled.addEventListener('change', () => {
     draft.connections.enabled = els.connectEnabled.checked;
   }, { render: false });
   renderConnectionStatus(els.connectEnabled.checked ? 'Connection feature enabled.' : 'Connection disabled.');
-  renderConnectedPeers();
 });
 
 els.connectDisplayName.addEventListener('input', () => {
@@ -1139,8 +1608,10 @@ els.settingsClearBtn.addEventListener('click', () => {
       showCancel: true,
     });
     if (!confirmed) return;
+    revokeAllObjectUrls();
     localStorage.removeItem(STORAGE_KEY_V3);
     localStorage.removeItem(STORAGE_KEY_V2);
+    if ('indexedDB' in window) indexedDB.deleteDatabase(MEDIA_DB_NAME);
     location.reload();
   })();
 });
@@ -1203,27 +1674,84 @@ function renderConnectionStatus(message, isError = false) {
   els.connectStatus.classList.toggle('is-error', isError);
 }
 
-function renderConnectedPeers() {
-  if (!els.connectedPeers) return;
+function getDirectThread(peerId) {
+  const existing = state.data.connections.directNotesByPeerId?.[peerId];
+  if (existing) return existing;
+  return {
+    threadId: `direct-${peerId}`,
+    type: 'direct-notes',
+    peerId,
+    messages: [],
+  };
+}
+
+function renderDirectNotesList() {
+  if (!els.directNotesList) return;
+  els.directNotesList.innerHTML = '';
   const peers = Object.values(state.data.connections.peersById || {});
-  els.connectedPeers.innerHTML = '';
   if (!peers.length) {
-    els.connectedPeers.innerHTML = '<p class="connect-note">No synced peers yet.</p>';
+    els.directNotesList.innerHTML = '<p class="direct-notes-empty">Pair with someone to start direct notes.</p>';
     return;
   }
 
-  peers
-    .sort((a, b) => String(b.lastSyncAt || '').localeCompare(String(a.lastSyncAt || '')))
-    .forEach((peer) => {
-      const row = document.createElement('div');
-      row.className = 'connected-peer';
-      const name = document.createElement('strong');
-      name.textContent = peer.displayName || peer.peerId;
-      const meta = document.createElement('span');
-      meta.textContent = `Trust: ${peer.trustState} · Last sync: ${peer.lastSyncAt ? new Date(peer.lastSyncAt).toLocaleString() : 'never'}`;
-      row.append(name, meta);
-      els.connectedPeers.append(row);
+  peers.forEach((peer) => {
+    const row = document.createElement('div');
+    row.className = 'direct-note-row';
+    const thread = getDirectThread(peer.peerId);
+    const latest = thread.messages[thread.messages.length - 1];
+    const summary = latest ? `${resolveActorName(latest.authorId, latest.authorName)}: ${latest.text}` : 'No notes yet';
+    row.innerHTML = `<div><strong>${peer.displayName || peer.peerId}</strong><div class="direct-note-summary">${summary}</div></div>`;
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'ghost';
+    btn.textContent = 'Open';
+    btn.addEventListener('click', () => {
+      void openDirectNotesThread(peer.peerId);
     });
+    row.append(btn);
+    els.directNotesList.append(row);
+  });
+}
+
+async function openDirectNotesThread(peerId) {
+  const thread = getDirectThread(peerId);
+  const history = thread.messages.slice(-8).map((msg) => (
+    `${resolveActorName(msg.authorId, msg.authorName)}: ${msg.text}`
+  ));
+  const peerName = state.data.connections.peersById[peerId]?.displayName || peerId;
+  const note = await showModalMessage({
+    title: `Direct notes: ${peerName}`,
+    message: `${history.length ? history.join('\n') : 'No notes yet.'}\n\nAdd a new note:`,
+    confirmText: 'Save note',
+    cancelText: 'Close',
+    showCancel: true,
+    input: { placeholder: 'Type a note…', defaultValue: '' },
+  });
+  if (!note) return;
+
+  const actor = getLocalActorMeta();
+  const message = {
+    id: crypto.randomUUID(),
+    text: note,
+    createdAt: new Date().toISOString(),
+    authorId: actor.actorId,
+    authorName: actor.authorName,
+    authorAvatar: actor.authorAvatar,
+  };
+  updateState((draft) => {
+    const existing = draft.connections.directNotesByPeerId?.[peerId] || {
+      threadId: `direct-${peerId}`,
+      type: 'direct-notes',
+      peerId,
+      messages: [],
+    };
+    existing.messages = [...(existing.messages || []), message];
+    if (!draft.connections.directNotesByPeerId) draft.connections.directNotesByPeerId = {};
+    draft.connections.directNotesByPeerId[peerId] = existing;
+  }, { render: false });
+  renderDirectNotesList();
+  sendProtocolMessage('direct-note', { toPeerId: peerId, threadType: 'direct-notes', message });
+  toast('Direct note saved.');
 }
 
 function trackPeerConnection(peerId, displayName, trustState = 'trusted') {
@@ -1234,18 +1762,19 @@ function trackPeerConnection(peerId, displayName, trustState = 'trusted') {
       displayName: displayName || existing.displayName || '',
       trustState,
       lastSyncAt: new Date().toISOString(),
+      publicKeyJwk: existing.publicKeyJwk || null,
     };
   }, { render: false });
-  renderConnectedPeers();
+  renderDirectNotesList();
 }
 
 async function applyIncomingMemoryShare(message) {
-  const posts = Array.isArray(message.payload?.posts) ? message.payload.posts : [];
-  if (!posts.length) return 0;
+  const memoryShares = Array.isArray(message.payload?.posts) ? message.payload.posts : [];
+  if (!memoryShares.length) return 0;
 
   let importedCount = 0;
-  for (const post of posts) {
-    const merged = importMemoryShare({ kind: 'mybook-memory-share', post }, { onConflict: 'generate' });
+  for (const share of memoryShares) {
+    const merged = await importMemoryShare(share, { onConflict: 'generate' });
     if (merged) importedCount += 1;
   }
   return importedCount;
@@ -1295,6 +1824,40 @@ async function handleProtocolMessage(raw) {
     return;
   }
 
+  if (msg.type === 'direct-note') {
+    const incoming = msg.payload?.message;
+    if (incoming && typeof incoming.text === 'string' && incoming.text.trim()) {
+      const peerId = msg.fromPeerId || msg.payload?.fromPeerId || '';
+      if (peerId) {
+        updateState((draft) => {
+          if (!draft.connections.directNotesByPeerId) draft.connections.directNotesByPeerId = {};
+          const existing = draft.connections.directNotesByPeerId[peerId] || {
+            threadId: `direct-${peerId}`,
+            type: 'direct-notes',
+            peerId,
+            messages: [],
+          };
+          existing.messages = [
+            ...(existing.messages || []),
+            {
+              id: typeof incoming.id === 'string' && incoming.id ? incoming.id : crypto.randomUUID(),
+              text: incoming.text,
+              createdAt: typeof incoming.createdAt === 'string' ? incoming.createdAt : new Date().toISOString(),
+              authorId: incoming.authorId || peerId,
+              authorName: incoming.authorName || msg.fromDisplayName || '',
+              authorAvatar: incoming.authorAvatar || '',
+            },
+          ];
+          draft.connections.directNotesByPeerId[peerId] = existing;
+        }, { render: false });
+        renderDirectNotesList();
+        renderConnectionStatus(`New direct note from ${msg.fromDisplayName || peerId}.`);
+      }
+    }
+    sendProtocolMessage('ack', { receivedType: 'direct-note' });
+    return;
+  }
+
   if (msg.type === 'ack') {
     renderConnectionStatus('Connected and synchronized.');
   }
@@ -1302,11 +1865,15 @@ async function handleProtocolMessage(raw) {
 
 function setupDataChannel(dc) {
   state.connectionRuntime.dc = dc;
-  dc.addEventListener('open', () => {
+  dc.addEventListener('open', async () => {
     renderConnectionStatus('Secure channel open. Syncing...');
     sendProtocolMessage('hello', { app: 'mybook' });
-    const posts = state.data.postOrder.slice(0, 50).map((id) => normalizePost(state.data.postsById[id])).filter(Boolean);
-    sendProtocolMessage('memory-share', { posts });
+    const posts = state.data.postOrder.slice(0, 50).map((id) => state.data.postsById[id]).filter(Boolean);
+    const signedPosts = [];
+    for (const post of posts) {
+      signedPosts.push(await buildMemorySharePayload(post));
+    }
+    sendProtocolMessage('memory-share', { posts: signedPosts });
   });
   dc.addEventListener('message', (event) => {
     void handleProtocolMessage(event.data);
@@ -1324,31 +1891,6 @@ function createPeerConnection() {
   state.connectionRuntime.pc = pc;
   pc.addEventListener('datachannel', (event) => setupDataChannel(event.channel));
   return pc;
-}
-
-function waitForIceGatheringComplete(pc, timeoutMs = 6000) {
-  if (pc.iceGatheringState === 'complete') return Promise.resolve();
-
-  return new Promise((resolve) => {
-    const timeout = setTimeout(() => {
-      cleanup();
-      resolve();
-    }, timeoutMs);
-
-    const onChange = () => {
-      if (pc.iceGatheringState === 'complete') {
-        cleanup();
-        resolve();
-      }
-    };
-
-    const cleanup = () => {
-      clearTimeout(timeout);
-      pc.removeEventListener('icegatheringstatechange', onChange);
-    };
-
-    pc.addEventListener('icegatheringstatechange', onChange);
-  });
 }
 
 async function pushSignal(endpoint, message) {
@@ -1372,18 +1914,8 @@ async function pollSignal(endpoint, sessionId, role) {
       const items = await res.json();
       const messages = Array.isArray(items) ? items : [];
       for (const item of messages) {
-        if (!state.connectionRuntime.pc) continue;
-        if (item.type === 'answer' && !state.connectionRuntime.pc.currentRemoteDescription) {
+        if (item.type === 'answer' && state.connectionRuntime.pc && !state.connectionRuntime.pc.currentRemoteDescription) {
           await state.connectionRuntime.pc.setRemoteDescription(item.payload);
-          renderConnectionStatus('Answer received from signaling endpoint. Waiting for channel...');
-        }
-        if (item.type === 'offer' && !state.connectionRuntime.pc.currentRemoteDescription) {
-          await state.connectionRuntime.pc.setRemoteDescription(item.payload);
-          const answer = await state.connectionRuntime.pc.createAnswer();
-          await state.connectionRuntime.pc.setLocalDescription(answer);
-          await waitForIceGatheringComplete(state.connectionRuntime.pc);
-          await pushSignal(endpoint, { sessionId, type: 'answer', payload: state.connectionRuntime.pc.localDescription });
-          renderConnectionStatus('Offer received from signaling endpoint. Answer posted.');
         }
       }
     } catch {
@@ -1407,7 +1939,6 @@ async function beginInviteFlow() {
 
   const offer = await pc.createOffer();
   await pc.setLocalDescription(offer);
-  await waitForIceGatheringComplete(pc);
 
   const sessionId = crypto.randomUUID();
   state.connectionRuntime.mode = 'invite';
@@ -1426,7 +1957,7 @@ async function beginInviteFlow() {
   els.inviteCodeInput.value = encodeSignalPayload(invite);
   await pushSignal(state.data.connections.signalingEndpoint, { sessionId, type: 'offer', payload: invite.offer });
   await pollSignal(state.data.connections.signalingEndpoint, sessionId, 'offerer');
-  renderConnectionStatus('Invite code ready. Share it, then paste back the answer code.');
+  renderConnectionStatus('Invite code ready. Share it with the other person.');
 }
 
 async function beginJoinFlow() {
@@ -1434,7 +1965,7 @@ async function beginJoinFlow() {
     toast('Enable Connect with someone first.', 'warn');
     return;
   }
-  renderConnectionStatus('Paste an invite code, then press Apply code to generate an answer.');
+  renderConnectionStatus('Paste an invite code, then press Apply code.');
 }
 
 async function applyPairingCode() {
@@ -1451,42 +1982,37 @@ async function applyPairingCode() {
     return;
   }
 
-  try {
-    if (payload.role === 'invite' && payload.offer) {
-      const pc = createPeerConnection();
-      state.connectionRuntime.mode = 'join';
-      state.connectionRuntime.signalingRole = 'answerer';
-      state.connectionRuntime.sessionId = payload.sessionId || crypto.randomUUID();
-      await pc.setRemoteDescription(payload.offer);
-      const answer = await pc.createAnswer();
-      await pc.setLocalDescription(answer);
-      await waitForIceGatheringComplete(pc);
+  if (payload.role === 'invite' && payload.offer) {
+    const pc = createPeerConnection();
+    state.connectionRuntime.mode = 'join';
+    state.connectionRuntime.signalingRole = 'answerer';
+    state.connectionRuntime.sessionId = payload.sessionId || crypto.randomUUID();
+    await pc.setRemoteDescription(payload.offer);
+    const answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
 
-      const answerPayload = {
-        v: PROTOCOL_VERSION,
-        role: 'answer',
-        sessionId: state.connectionRuntime.sessionId,
-        answer: pc.localDescription,
-        fromPeerId: state.data.connections.peerId,
-        fromDisplayName: state.data.connections.displayName || state.data.profile.name || 'Mybook User',
-      };
+    const answerPayload = {
+      v: PROTOCOL_VERSION,
+      role: 'answer',
+      sessionId: state.connectionRuntime.sessionId,
+      answer: pc.localDescription,
+      fromPeerId: state.data.connections.peerId,
+      fromDisplayName: state.data.connections.displayName || state.data.profile.name || 'Mybook User',
+    };
 
-      els.inviteCodeInput.value = encodeSignalPayload(answerPayload);
-      await pushSignal(state.data.connections.signalingEndpoint, { sessionId: state.connectionRuntime.sessionId, type: 'answer', payload: answerPayload.answer });
-      renderConnectionStatus('Answer code generated. Send it back to the inviter.');
-      return;
-    }
-
-    if (payload.role === 'answer' && payload.answer && state.connectionRuntime.pc) {
-      await state.connectionRuntime.pc.setRemoteDescription(payload.answer);
-      renderConnectionStatus('Answer accepted. Waiting for channel...');
-      return;
-    }
-
-    toast('Unsupported code payload.', 'error');
-  } catch {
-    renderConnectionStatus('Could not apply this pairing code. Regenerate and try again.', true);
+    els.inviteCodeInput.value = encodeSignalPayload(answerPayload);
+    await pushSignal(state.data.connections.signalingEndpoint, { sessionId: state.connectionRuntime.sessionId, type: 'answer', payload: answerPayload.answer });
+    renderConnectionStatus('Answer code generated. Send it back to the inviter.');
+    return;
   }
+
+  if (payload.role === 'answer' && payload.answer && state.connectionRuntime.pc) {
+    await state.connectionRuntime.pc.setRemoteDescription(payload.answer);
+    renderConnectionStatus('Answer accepted. Waiting for channel...');
+    return;
+  }
+
+  toast('Unsupported code payload.', 'error');
 }
 
 function normalizeImportPayload(raw) {
@@ -1503,6 +2029,195 @@ function normalizeImportPayload(raw) {
   return makeDefaultData();
 }
 
+
+function stableStringify(value) {
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => stableStringify(item)).join(',')}]`;
+  }
+
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableStringify(value[key])}`).join(',')}}`;
+  }
+
+  return JSON.stringify(value);
+}
+
+function postContentHash(post = {}) {
+  return stableStringify({
+    text: post.text || '',
+    date: post.date || '',
+    createdAt: post.createdAt || '',
+    updatedAt: post.updatedAt || '',
+    tags: Array.isArray(post.tags) ? post.tags : [],
+    peopleIds: Array.isArray(post.peopleIds) ? post.peopleIds : [],
+    media: Array.isArray(post.media) ? post.media.map((item) => ({
+      mediaId: item.mediaId || '',
+      type: item.type,
+      name: item.name,
+    })) : [],
+    comments: Array.isArray(post.comments) ? post.comments.map((comment) => ({
+      text: comment.text || '',
+      createdAt: comment.createdAt || '',
+      updatedAt: comment.updatedAt || '',
+      authorId: comment.authorId || '',
+      authorName: comment.authorName || '',
+      authorAvatar: comment.authorAvatar || '',
+    })) : [],
+    reactions: post.reactions && typeof post.reactions === 'object'
+      ? Object.keys(post.reactions).sort().map((actorId) => ({
+        actorId,
+        authorName: post.reactions[actorId]?.authorName || '',
+        authorAvatar: post.reactions[actorId]?.authorAvatar || '',
+        createdAt: post.reactions[actorId]?.createdAt || '',
+      }))
+      : [],
+  });
+}
+
+function personContentHash(person = {}) {
+  return stableStringify({
+    name: person.name || '',
+    relationship: person.relationship || '',
+    avatarDataUrl: person.avatarDataUrl || '',
+  });
+}
+
+function summarizeImportDiff(importedData, currentData) {
+  const incomingPosts = importedData.postOrder
+    .map((id) => importedData.postsById[id])
+    .filter(Boolean);
+  const existingPostHashes = new Set(Object.values(currentData.postsById).map((post) => postContentHash(post)));
+  let postsToAdd = 0;
+  let postsToUpdate = 0;
+
+  incomingPosts.forEach((post) => {
+    const currentPost = currentData.postsById[post.id];
+    if (currentPost) {
+      if (postContentHash(currentPost) !== postContentHash(post)) postsToUpdate += 1;
+      return;
+    }
+
+    if (!existingPostHashes.has(postContentHash(post))) postsToAdd += 1;
+  });
+
+  const existingPeopleById = new Set(currentData.people.map((person) => person.id));
+  const existingPeopleHashes = new Set(currentData.people.map((person) => personContentHash(person)));
+  let peopleToAdd = 0;
+  importedData.people.forEach((person) => {
+    if (!existingPeopleById.has(person.id) && !existingPeopleHashes.has(personContentHash(person))) {
+      peopleToAdd += 1;
+    }
+  });
+
+  const profileConflicts = [];
+  if ((importedData.profile.name || '').trim() && importedData.profile.name !== currentData.profile.name) profileConflicts.push('name');
+  if ((importedData.profile.bio || '').trim() && importedData.profile.bio !== currentData.profile.bio) profileConflicts.push('bio');
+  if (importedData.profile.avatarDataUrl && importedData.profile.avatarDataUrl !== currentData.profile.avatarDataUrl) profileConflicts.push('avatar');
+
+  return {
+    postsToAdd,
+    postsToUpdate,
+    peopleToAdd,
+    profileConflicts,
+  };
+}
+
+function mergePostsById(currentPostsById, importedPostsById) {
+  const mergedPostsById = { ...currentPostsById };
+  const existingHashToId = new Map();
+  Object.values(mergedPostsById).forEach((post) => {
+    existingHashToId.set(postContentHash(post), post.id);
+  });
+
+  const addedPostIds = [];
+  Object.keys(importedPostsById).forEach((postId) => {
+    const incomingPost = normalizePost(importedPostsById[postId]);
+    const existingPost = mergedPostsById[incomingPost.id];
+    if (existingPost) {
+      if (postContentHash(existingPost) !== postContentHash(incomingPost)) mergedPostsById[incomingPost.id] = incomingPost;
+      return;
+    }
+
+    const hash = postContentHash(incomingPost);
+    if (existingHashToId.has(hash)) return;
+
+    mergedPostsById[incomingPost.id] = incomingPost;
+    existingHashToId.set(hash, incomingPost.id);
+    addedPostIds.push(incomingPost.id);
+  });
+
+  return { mergedPostsById, addedPostIds };
+}
+
+function mergePostOrder(currentOrder, importedOrder, postsById, addedPostIds = []) {
+  const seen = new Set();
+  const mergedOrder = [];
+
+  [...importedOrder.filter((id) => addedPostIds.includes(id)), ...currentOrder, ...importedOrder].forEach((id) => {
+    if (typeof id !== 'string' || !postsById[id] || seen.has(id)) return;
+    seen.add(id);
+    mergedOrder.push(id);
+  });
+
+  Object.keys(postsById).forEach((id) => {
+    if (!seen.has(id)) mergedOrder.push(id);
+  });
+
+  return mergedOrder;
+}
+
+function mergePeople(currentPeople, importedPeople) {
+  const mergedPeople = currentPeople.map((person) => ({ ...person }));
+  const existingById = new Set(mergedPeople.map((person) => person.id));
+  const existingHashes = new Set(mergedPeople.map((person) => personContentHash(person)));
+
+  importedPeople.forEach((incomingPerson) => {
+    if (existingById.has(incomingPerson.id)) return;
+    const hash = personContentHash(incomingPerson);
+    if (existingHashes.has(hash)) return;
+    mergedPeople.push({ ...incomingPerson });
+    existingById.add(incomingPerson.id);
+    existingHashes.add(hash);
+  });
+
+  return mergedPeople;
+}
+
+function applyImportedData(imported) {
+  state.data = imported;
+  updateState((draft) => {
+    draft.version = 3;
+  });
+
+  els.profileName.value = state.data.profile.name;
+  els.profileBio.value = state.data.profile.bio;
+  els.themeSelect.value = state.data.preferences.theme;
+  els.connectEnabled.checked = Boolean(state.data.connections.enabled);
+  els.connectDisplayName.value = state.data.connections.displayName || state.data.profile.name || '';
+  els.signalingEndpoint.value = state.data.connections.signalingEndpoint || '';
+  applyTheme(state.data.preferences.theme);
+  renderPeopleList();
+  renderDirectNotesList();
+  renderPostPeopleMenu();
+  renderFilterPeopleList();
+}
+
+function mergeImportedData(imported) {
+  const { mergedPostsById, addedPostIds } = mergePostsById(state.data.postsById, imported.postsById);
+  const mergedPostOrder = mergePostOrder(state.data.postOrder, imported.postOrder, mergedPostsById, addedPostIds);
+  const mergedPeople = mergePeople(state.data.people, imported.people);
+
+  const mergedData = normalizeV3({
+    ...state.data,
+    postsById: mergedPostsById,
+    postOrder: mergedPostOrder,
+    people: mergedPeople,
+    version: 3,
+  });
+
+  applyImportedData(mergedData);
+}
+
 function buildPostShareText(post) {
   const tags = (post.tags || []).map((tag) => `#${tag}`).join(' ');
   return [
@@ -1514,24 +2229,36 @@ function buildPostShareText(post) {
   ].filter(Boolean).join('\n');
 }
 
-function dataUrlToFile(dataUrl, fallbackName) {
+function dataUrlToBlob(dataUrl) {
   const [meta, base64Payload = ''] = String(dataUrl || '').split(',');
   const match = /data:([^;]+);base64/.exec(meta || '');
   const mime = match ? match[1] : 'application/octet-stream';
   const binary = atob(base64Payload);
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
-  return new File([bytes], fallbackName, { type: mime });
+  return new Blob([bytes], { type: mime });
+}
+
+async function resolveMediaFile(mediaItem, index) {
+  const fallbackName = mediaItem.name || `memory-media-${index + 1}.${mediaItem.type === 'video' ? 'mp4' : 'jpg'}`;
+  if (mediaItem.mediaId) {
+    const stored = await getMediaBlob(mediaItem.mediaId);
+    if (stored?.blob) return new File([stored.blob], fallbackName, { type: stored.blob.type || (mediaItem.type === 'video' ? 'video/mp4' : 'image/jpeg') });
+  }
+  if (mediaItem.dataUrl) {
+    return new File([dataUrlToBlob(mediaItem.dataUrl)], fallbackName, { type: mediaItem.type === 'video' ? 'video/mp4' : 'image/jpeg' });
+  }
+  return null;
 }
 
 async function quickSharePost(post) {
   const shareText = buildPostShareText(post);
   const files = [];
 
-  (post.media || []).forEach((mediaItem, index) => {
-    const fallbackName = mediaItem.name || `memory-media-${index + 1}.${mediaItem.type === 'video' ? 'mp4' : 'jpg'}`;
-    files.push(dataUrlToFile(mediaItem.dataUrl, fallbackName));
-  });
+  for (const [index, mediaItem] of (post.media || []).entries()) {
+    const file = await resolveMediaFile(mediaItem, index);
+    if (file) files.push(file);
+  }
 
   const canShareFiles = files.length > 0 && navigator.canShare && navigator.canShare({ files });
   const payload = {
@@ -1555,20 +2282,138 @@ async function quickSharePost(post) {
   toast('Sharing is not available on this browser.', 'warn');
 }
 
-function buildMemorySharePayload(post) {
+function bytesToBase64(bytes) {
+  let binary = '';
+  bytes.forEach((byte) => {
+    binary += String.fromCharCode(byte);
+  });
+  return btoa(binary);
+}
+
+function base64ToBytes(base64) {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+
+function stableSerialize(value) {
+  if (Array.isArray(value)) return `[${value.map(stableSerialize).join(',')}]`;
+  if (value && typeof value === 'object') {
+    const keys = Object.keys(value).sort();
+    return `{${keys.map((key) => `${JSON.stringify(key)}:${stableSerialize(value[key])}`).join(',')}}`;
+  }
+  return JSON.stringify(value);
+}
+
+async function ensureProfileIdentity() {
+  const existing = state.data.connections.identity || {};
+  if (existing.privateKeyJwk && existing.publicKeyJwk) return existing;
+
+  const pair = await crypto.subtle.generateKey(
+    { name: 'ECDSA', namedCurve: 'P-256' },
+    true,
+    ['sign', 'verify'],
+  );
+  const [privateKeyJwk, publicKeyJwk] = await Promise.all([
+    crypto.subtle.exportKey('jwk', pair.privateKey),
+    crypto.subtle.exportKey('jwk', pair.publicKey),
+  ]);
+  const generatedAt = new Date().toISOString();
+  updateState((draft) => {
+    draft.connections.identity = { privateKeyJwk, publicKeyJwk, generatedAt };
+  }, { render: false });
+  return { privateKeyJwk, publicKeyJwk, generatedAt };
+}
+
+async function signMemoryShareContent(sender, post) {
+  const identity = await ensureProfileIdentity();
+  const privateKey = await crypto.subtle.importKey(
+    'jwk',
+    identity.privateKeyJwk,
+    { name: 'ECDSA', namedCurve: 'P-256' },
+    false,
+    ['sign'],
+  );
+  const payloadToSign = stableSerialize({
+    sender,
+    post,
+  });
+  const hashBuffer = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(payloadToSign));
+  const signatureBuffer = await crypto.subtle.sign(
+    { name: 'ECDSA', hash: 'SHA-256' },
+    privateKey,
+    hashBuffer,
+  );
+  return {
+    hash: bytesToBase64(new Uint8Array(hashBuffer)),
+    signature: bytesToBase64(new Uint8Array(signatureBuffer)),
+    publicKeyJwk: identity.publicKeyJwk,
+  };
+}
+
+function blobToDataUrl(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('blob-read-failed'));
+    reader.onload = () => resolve(reader.result);
+    reader.readAsDataURL(blob);
+  });
+}
+
+async function materializePostMediaForExport(post) {
+  const media = [];
+  for (const item of (post.media || [])) {
+    if (item.dataUrl) {
+      media.push({
+        dataUrl: item.dataUrl,
+        type: item.type,
+        name: item.name,
+      });
+      continue;
+    }
+    if (!item.mediaId) continue;
+    const stored = await getMediaBlob(item.mediaId);
+    if (!stored?.blob) continue;
+    const dataUrl = await blobToDataUrl(stored.blob);
+    media.push({
+      dataUrl,
+      type: item.type,
+      name: item.name,
+    });
+  }
+  return media;
+}
+
+async function buildMemorySharePayload(post) {
+  const normalizedPost = normalizePost(post);
+  const postForExport = {
+    ...normalizedPost,
+    media: await materializePostMediaForExport(normalizedPost),
+  };
+  const sender = {
+    senderId: state.data.connections.peerId,
+    displayName: state.data.connections.displayName || state.data.profile.name || 'Mybook User',
+    exportedAt: new Date().toISOString(),
+  };
+  const integrity = await signMemoryShareContent(sender, postForExport);
   return {
     kind: 'mybook-memory-share',
     version: 1,
     exportedAt: new Date().toISOString(),
+    sender,
+    hash: integrity.hash,
+    signature: integrity.signature,
+    signerPublicKey: integrity.publicKeyJwk,
     post: {
-      ...normalizePost(post),
+      ...postForExport,
       id: post.id,
     },
   };
 }
 
-function downloadMemoryShare(post) {
-  const payload = buildMemorySharePayload(post);
+async function downloadMemoryShare(post) {
+  const payload = await buildMemorySharePayload(post);
   const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -1578,14 +2423,128 @@ function downloadMemoryShare(post) {
   URL.revokeObjectURL(url);
 }
 
-function importMemoryShare(raw, options = {}) {
+async function verifyMemoryShareSignature(raw, post, sender) {
+  try {
+    const payloadToVerify = stableSerialize({ sender, post });
+    const hashBuffer = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(payloadToVerify));
+    const computedHash = bytesToBase64(new Uint8Array(hashBuffer));
+    if (computedHash !== raw.hash) return { valid: false, fingerprint: '' };
+
+    const publicKey = await crypto.subtle.importKey(
+      'jwk',
+      raw.signerPublicKey,
+      { name: 'ECDSA', namedCurve: 'P-256' },
+      false,
+      ['verify'],
+    );
+    const ok = await crypto.subtle.verify(
+      { name: 'ECDSA', hash: 'SHA-256' },
+      publicKey,
+      base64ToBytes(raw.signature),
+      hashBuffer,
+    );
+    const fingerprint = computedHash.slice(0, 16);
+    return { valid: Boolean(ok), fingerprint };
+  } catch {
+    return { valid: false, fingerprint: '' };
+  }
+}
+
+async function confirmSenderTrust(sender, signerPublicKey, fingerprint) {
+  const senderId = sender.senderId || `unknown-${fingerprint}`;
+  const existing = state.data.connections.peersById[senderId];
+  if (existing?.trustState === 'blocked') {
+    toast('Import blocked: sender is blocked on this device.', 'warn');
+    return 'blocked';
+  }
+  if (existing?.trustState === 'trusted') {
+    const knownKey = existing.publicKeyJwk ? stableSerialize(existing.publicKeyJwk) : '';
+    const incomingKey = signerPublicKey ? stableSerialize(signerPublicKey) : '';
+    if (knownKey && incomingKey && knownKey !== incomingKey) {
+      const proceed = await showModalMessage({
+        title: 'Sender key changed',
+        message: `Trusted sender ${existing.displayName || senderId} has a different signing key.\nFingerprint: ${fingerprint || 'n/a'}`,
+        confirmText: 'Trust new key',
+        cancelText: 'Block sender',
+        showCancel: true,
+      });
+      if (!proceed) {
+        updateState((draft) => {
+          draft.connections.peersById[senderId] = {
+            ...existing,
+            trustState: 'blocked',
+            lastSyncAt: new Date().toISOString(),
+          };
+        }, { render: false });
+        return 'blocked';
+      }
+    } else {
+      return 'trusted';
+    }
+  }
+
+  const trustChoice = await showModalMessage({
+    title: 'Trust this sender?',
+    message: `${sender.displayName || 'Unknown sender'} (${senderId}) wants to share memory.\nFingerprint: ${fingerprint || 'n/a'}`,
+    confirmText: 'Trust sender',
+    cancelText: 'Block sender',
+    showCancel: true,
+  });
+
+  const nextTrustState = trustChoice ? 'trusted' : 'blocked';
+  updateState((draft) => {
+    const prev = draft.connections.peersById[senderId] || {};
+    draft.connections.peersById[senderId] = {
+      peerId: senderId,
+      displayName: sender.displayName || prev.displayName || '',
+      trustState: nextTrustState,
+      lastSyncAt: new Date().toISOString(),
+      publicKeyJwk: signerPublicKey && typeof signerPublicKey === 'object' ? signerPublicKey : (prev.publicKeyJwk || null),
+    };
+  }, { render: false });
+  return nextTrustState;
+}
+
+async function importMemoryShare(raw, options = {}) {
   const incomingPost = raw && raw.post ? normalizePost(raw.post) : null;
   if (!incomingPost || (!incomingPost.text && incomingPost.media.length === 0)) return false;
+  const sender = raw && raw.sender && typeof raw.sender === 'object' ? raw.sender : null;
+  if (!sender || typeof raw.signature !== 'string' || typeof raw.hash !== 'string' || !raw.signerPublicKey) return false;
+
+  const signatureStatus = await verifyMemoryShareSignature(raw, incomingPost, sender);
+  if (!signatureStatus.valid) {
+    const proceed = await showModalMessage({
+      title: 'Unverified memory share',
+      message: 'Signature check failed for this memory share. Import anyway?',
+      confirmText: 'Import anyway',
+      cancelText: 'Reject',
+      showCancel: true,
+    });
+    if (!proceed) return false;
+  }
+
+  const trustState = await confirmSenderTrust(sender, raw.signerPublicKey, signatureStatus.fingerprint);
+  if (trustState === 'blocked') return false;
 
   const { onConflict = 'generate' } = options;
   if (state.data.postsById[incomingPost.id] && onConflict === 'skip') return false;
+  let mediaRefs = [];
+  try {
+    mediaRefs = await persistPostMediaRefs(incomingPost.media || []);
+  } catch {
+    return false;
+  }
   const incomingId = state.data.postsById[incomingPost.id] ? crypto.randomUUID() : incomingPost.id;
-  const postToInsert = { ...incomingPost, id: incomingId };
+  const postToInsert = {
+    ...incomingPost,
+    id: incomingId,
+    media: mediaRefs,
+    importedFrom: {
+      senderId: sender.senderId || '',
+      displayName: sender.displayName || 'Unknown sender',
+      exportedAt: sender.exportedAt || '',
+    },
+  };
   return updateState((draft) => {
     draft.postsById[postToInsert.id] = postToInsert;
     draft.postOrder.unshift(postToInsert.id);
@@ -1607,7 +2566,7 @@ async function handleImportFile(event, mode = 'auto') {
     }
 
     if (isMemoryShare) {
-      const merged = importMemoryShare(parsed);
+      const merged = await importMemoryShare(parsed);
       if (!merged) {
         toast('Memory share import failed: invalid memory payload.', 'error');
       } else {
@@ -1617,24 +2576,45 @@ async function handleImportFile(event, mode = 'auto') {
     }
 
     const imported = normalizeImportPayload(parsed);
+    const diff = summarizeImportDiff(imported, state.data);
+    const summary = [
+      `Posts to add: ${diff.postsToAdd}`,
+      `Posts to update: ${diff.postsToUpdate}`,
+      `People to add: ${diff.peopleToAdd}`,
+      `Profile conflicts: ${diff.profileConflicts.length ? diff.profileConflicts.join(', ') : 'none'}`,
+    ].join('\n');
 
-    state.data = imported;
-    updateState((draft) => {
-      draft.version = 3;
+    const mergeChoice = await showModalMessage({
+      title: 'Import backup',
+      message: `Review import changes before applying.\n\n${summary}`,
+      confirmText: 'Merge into current data',
+      cancelText: 'Replace all local data',
+      showCancel: true,
     });
 
-    els.profileName.value = state.data.profile.name;
-    els.profileBio.value = state.data.profile.bio;
-    els.themeSelect.value = state.data.preferences.theme;
-    els.connectEnabled.checked = Boolean(state.data.connections.enabled);
-    els.connectDisplayName.value = state.data.connections.displayName || state.data.profile.name || '';
-    els.signalingEndpoint.value = state.data.connections.signalingEndpoint || '';
-    renderConnectedPeers();
-    applyTheme(state.data.preferences.theme);
-    renderPeopleList();
-    renderPostPeopleMenu();
-    renderFilterPeopleList();
-    toast('Backup imported.');
+    if (mergeChoice === true) {
+      mergeImportedData(imported);
+      await migrateLegacyMediaToIndexedDb();
+      toast('Backup merged into current data.');
+      return;
+    }
+
+    const replaceConfirmed = await showModalMessage({
+      title: 'Replace local data?',
+      message: 'This will overwrite all current profile, people, and memories on this device. This cannot be undone without another backup file.',
+      confirmText: 'Replace everything',
+      cancelText: 'Cancel',
+      showCancel: true,
+    });
+
+    if (!replaceConfirmed) {
+      toast('Import canceled.', 'warn');
+      return;
+    }
+
+    applyImportedData(imported);
+    await migrateLegacyMediaToIndexedDb();
+    toast('Backup imported by replacing local data.');
   } catch {
     toast('Import failed: invalid JSON file.', 'error');
   } finally {
@@ -1656,9 +2636,16 @@ if ('serviceWorker' in navigator) {
 }
 
 async function init() {
+  try {
+    await openMediaDb();
+  } catch {
+    toast('IndexedDB is unavailable, so media features may be limited on this browser.', 'warn');
+  }
   await load();
+  await migrateLegacyMediaToIndexedDb();
   renderAvatar();
   renderPeopleList();
+  renderDirectNotesList();
   renderPostPeopleMenu();
   renderPosts();
 }

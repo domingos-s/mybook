@@ -12,7 +12,7 @@ A private, on-device social memory feed with a Facebook-like aesthetic.
 - Theme settings (`system`, `light`, `dark`) applied immediately
 - Small toast notifications for key actions (saved/deleted/imported/migrated)
 - Search and sort posts
-- Export/import JSON backup with defensive import normalization
+- Export/import JSON backup with defensive import normalization and an import decision step (merge vs replace)
 - Data stored locally in `localStorage`
 - Offline support through a service worker
 - In-app "Update app" button to clear cached app assets and refresh to latest files
@@ -42,3 +42,23 @@ http://localhost:8000
 
 ## Privacy
 Posts are stored only in the browser's localStorage on the device where the app is used. Export backups manually if you want to move data to another device.
+
+## Backup import modes
+- Importing a backup now opens a review modal with a diff summary before any local state is changed.
+- Summary counts include:
+  - posts to add
+  - posts to update (same id, different content)
+  - people to add
+  - profile conflicts (`name`, `bio`, `avatar`)
+- **Merge into current data** (recommended):
+  - keeps your current profile and preferences
+  - merges posts with de-duplication (match by `id` first, then content hash fallback)
+  - merges people with de-duplication (match by `id` first, then content hash fallback)
+- **Replace all local data**:
+  - requires a second explicit confirmation before overwrite
+  - replaces your current on-device dataset with the imported backup
+
+## Recovery expectations
+- Imports and merges are persisted to `localStorage` immediately after confirmation.
+- There is no built-in undo/restore history. To recover from an unwanted import, re-import a prior backup file.
+- For safest recovery, export a backup before importing from another device or archive.
