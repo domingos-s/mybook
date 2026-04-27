@@ -419,13 +419,8 @@ function getSecurityPrefs() {
 
 function syncSecurityControls() {
   const { lockEnabled, passwordHash } = getSecurityPrefs();
-  els.appLockEnabled.checked = lockEnabled;
-  els.appLockPasswordBtn.disabled = !lockEnabled;
-  if (!lockEnabled) {
-    els.appLockPasswordBtn.textContent = 'Enable App lock to set passcode';
-    return;
-  }
-  els.appLockPasswordBtn.textContent = passwordHash ? 'Change passcode' : 'Set passcode';
+  els.appLockEnabled.checked = lockEnabled && Boolean(passwordHash);
+  els.appLockPasswordBtn.textContent = passwordHash ? 'Change password' : 'Set password';
 }
 
 async function sha256Hex(value) {
@@ -1691,18 +1686,15 @@ els.themeSelect.addEventListener('change', () => {
 
 els.appLockPasswordBtn.addEventListener('click', () => {
   void (async () => {
-    if (!getSecurityPrefs().lockEnabled) {
-      toast('Enable App lock first, then set your passcode.', 'warn');
-      return;
-    }
     const nextPassword = await promptNewLockPassword();
     if (!nextPassword) return;
     const hash = await sha256Hex(nextPassword);
     updateState((draft) => {
+      draft.preferences.security.lockEnabled = true;
       draft.preferences.security.passwordHash = hash;
     }, { render: false });
     syncSecurityControls();
-    toast('Passcode saved.');
+    toast('App lock password saved.');
   })();
 });
 
@@ -1723,7 +1715,7 @@ els.appLockEnabled.addEventListener('change', () => {
         draft.preferences.security.passwordHash = hash;
       }, { render: false });
       syncSecurityControls();
-      toast('App lock enabled and passcode saved.');
+      toast('App lock enabled.');
       return;
     }
 
