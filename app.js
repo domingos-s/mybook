@@ -77,7 +77,6 @@ const els = {
   lockScreen: document.getElementById('lockScreen'),
   lockForm: document.getElementById('lockForm'),
   lockPasswordInput: document.getElementById('lockPasswordInput'),
-  lockResetBtn: document.getElementById('lockResetBtn'),
   lockError: document.getElementById('lockError'),
   messageModal: document.getElementById('messageModal'),
   messageModalTitle: document.getElementById('messageModalTitle'),
@@ -427,13 +426,8 @@ function getSecurityPrefs() {
 
 function syncSecurityControls() {
   const { lockEnabled, passwordHash } = getSecurityPrefs();
-  els.appLockEnabled.checked = lockEnabled;
-  els.appLockPasswordBtn.disabled = !lockEnabled;
-  if (!lockEnabled) {
-    els.appLockPasswordBtn.textContent = 'Enable App lock to set passcode';
-    return;
-  }
-  els.appLockPasswordBtn.textContent = passwordHash ? 'Change passcode' : 'Set passcode';
+  els.appLockEnabled.checked = lockEnabled && Boolean(passwordHash);
+  els.appLockPasswordBtn.textContent = passwordHash ? 'Change password' : 'Set password';
 }
 
 async function sha256Hex(value) {
@@ -1699,18 +1693,15 @@ els.themeSelect.addEventListener('change', () => {
 
 els.appLockPasswordBtn.addEventListener('click', () => {
   void (async () => {
-    if (!getSecurityPrefs().lockEnabled) {
-      toast('Enable App lock first, then set your passcode.', 'warn');
-      return;
-    }
     const nextPassword = await promptNewLockPassword();
     if (!nextPassword) return;
     const hash = await sha256Hex(nextPassword);
     updateState((draft) => {
+      draft.preferences.security.lockEnabled = true;
       draft.preferences.security.passwordHash = hash;
     }, { render: false });
     syncSecurityControls();
-    toast('Passcode saved.');
+    toast('App lock password saved.');
   })();
 });
 
@@ -1731,7 +1722,7 @@ els.appLockEnabled.addEventListener('change', () => {
         draft.preferences.security.passwordHash = hash;
       }, { render: false });
       syncSecurityControls();
-      toast('App lock enabled and passcode saved.');
+      toast('App lock enabled.');
       return;
     }
 
@@ -2819,10 +2810,6 @@ async function requireAppUnlockIfNeeded() {
   els.lockPasswordInput.focus();
 
   await new Promise((resolve) => {
-    const teardown = () => {
-      els.lockForm.removeEventListener('submit', onSubmit);
-      els.lockResetBtn.removeEventListener('click', onReset);
-    };
     const onSubmit = async (event) => {
       event.preventDefault();
       const candidate = els.lockPasswordInput.value || '';
@@ -2832,23 +2819,10 @@ async function requireAppUnlockIfNeeded() {
         els.lockPasswordInput.select();
         return;
       }
-      teardown();
+      els.lockForm.removeEventListener('submit', onSubmit);
       resolve();
     };
-    const onReset = async () => {
-      const confirmed = await showModalMessage({
-        title: 'Reset locked app data?',
-        message: 'If you forgot your passcode, you can reset this device data. This erases local profile, people, and memories on this device.',
-        confirmText: 'Reset device data',
-        cancelText: 'Cancel',
-        showCancel: true,
-      });
-      if (!confirmed) return;
-      wipeLocalAppData();
-      location.reload();
-    };
     els.lockForm.addEventListener('submit', onSubmit);
-    els.lockResetBtn.addEventListener('click', onReset);
   });
 
   els.lockScreen.classList.add('hidden');
