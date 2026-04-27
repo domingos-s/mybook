@@ -41,6 +41,13 @@ body {
   color: var(--text-1);
 }
 
+body.app-locked .topbar,
+body.app-locked .shell,
+body.app-locked .settings-modal {
+  visibility: hidden;
+  pointer-events: none;
+}
+
 button, .import-label, .tool-upload, .menu-item {
   border: 0;
   border-radius: var(--radius-sm);
@@ -464,6 +471,40 @@ textarea:focus-visible, input:focus-visible, select:focus-visible {
 
 .hidden { display: none; }
 
+.lock-screen {
+  position: fixed;
+  inset: 0;
+  background: var(--overlay);
+  display: grid;
+  place-items: center;
+  z-index: 120;
+  padding: 16px;
+}
+.lock-card {
+  width: min(100%, 360px);
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-2);
+  padding: 16px;
+  display: grid;
+  gap: 10px;
+}
+.lock-card h2 { margin: 0; }
+.lock-card p { margin: 0; color: var(--text-2); }
+.lock-card input {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-2);
+  color: var(--text-1);
+  padding: 11px 12px;
+  font: inherit;
+}
+.lock-error {
+  color: var(--danger) !important;
+  font-size: 13px;
+}
+
 @media (prefers-reduced-motion: no-preference) {
   .settings-modal,
   .message-modal,
@@ -539,6 +580,11 @@ textarea:focus-visible, input:focus-visible, select:focus-visible {
   margin: 6px 0 10px;
   font-size: 12px;
   color: var(--text-2);
+}
+.security-panel {
+  margin-top: 10px;
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
 }
 .connect-actions {
   display: grid;
