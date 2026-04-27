@@ -75,6 +75,31 @@
         <option value="dark">Dark</option>
       </select>
 
+
+      <section class="connect-panel">
+        <div class="connect-panel-head">
+          <h3>Connect with someone</h3>
+          <label class="connect-toggle">
+            <input id="connectEnabled" type="checkbox" />
+            <span>Enable</span>
+          </label>
+        </div>
+        <p class="connect-note">Optional sync. Disabled by default to keep private offline mode.</p>
+        <label class="settings-label" for="connectDisplayName">Display name</label>
+        <input id="connectDisplayName" class="settings-select" type="text" maxlength="40" placeholder="How others see you" />
+        <label class="settings-label" for="signalingEndpoint">Signaling endpoint (optional)</label>
+        <input id="signalingEndpoint" class="settings-select" type="url" placeholder="https://example.com/signal" />
+        <div class="connect-actions">
+          <button id="startInviteBtn" class="ghost" type="button">Create invite code</button>
+          <button id="startJoinBtn" class="ghost" type="button">Join with invite</button>
+        </div>
+        <label class="settings-label" for="inviteCodeInput">Invite / Answer code</label>
+        <textarea id="inviteCodeInput" class="settings-select connect-code" rows="4" placeholder="Paste invite or generated answer code"></textarea>
+        <button id="applyCodeBtn" class="primary" type="button">Apply code</button>
+        <p id="connectStatus" class="connect-status">Connection disabled.</p>
+        <div id="connectedPeers" class="connected-peers"></div>
+      </section>
+
       <button id="settingsClearBtn" class="danger" type="button">Clear all memories</button>
     </div>
   </div>

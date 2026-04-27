@@ -3,6 +3,8 @@ const STORAGE_KEY_V2 = 'mybook_v2';
 const MAX_IMAGE_DIMENSION = 1600;
 const IMAGE_OUTPUT_QUALITY = 0.82;
 const MAX_VIDEO_FILE_BYTES = 12 * 1024 * 1024;
+const PROTOCOL_VERSION = 1;
+const DEFAULT_ICE_SERVERS = [{ urls: 'stun:stun.l.google.com:19302' }];
 
 const els = {
   profileName: document.getElementById('profileName'),
@@ -50,6 +52,15 @@ const els = {
   exportBtn: document.getElementById('exportBtn'),
   importMemoryFile: document.getElementById('importMemoryFile'),
   importFile: document.getElementById('importFile'),
+  connectEnabled: document.getElementById('connectEnabled'),
+  connectDisplayName: document.getElementById('connectDisplayName'),
+  signalingEndpoint: document.getElementById('signalingEndpoint'),
+  startInviteBtn: document.getElementById('startInviteBtn'),
+  startJoinBtn: document.getElementById('startJoinBtn'),
+  inviteCodeInput: document.getElementById('inviteCodeInput'),
+  applyCodeBtn: document.getElementById('applyCodeBtn'),
+  connectStatus: document.getElementById('connectStatus'),
+  connectedPeers: document.getElementById('connectedPeers'),
   accountMenuBtn: document.getElementById('accountMenuBtn'),
   accountMenu: document.getElementById('accountMenu'),
   messageModal: document.getElementById('messageModal'),
@@ -66,6 +77,15 @@ const state = {
   selectedPostPeople: [],
   activeFilters: { tags: [], peopleIds: [] },
   pendingPersonAvatarDataUrl: '',
+  connectionRuntime: {
+    mode: '',
+    signalingRole: '',
+    sessionId: '',
+    pc: null,
+    dc: null,
+    remotePeerId: '',
+    pollTimer: null,
+  },
 };
 
 function makeDefaultData() {
@@ -77,6 +97,13 @@ function makeDefaultData() {
     postOrder: [],
     preferences: {
       theme: 'system',
+    },
+    connections: {
+      enabled: false,
+      peerId: crypto.randomUUID(),
+      displayName: '',
+      signalingEndpoint: '',
+      peersById: {},
     },
   };
 }
@@ -237,6 +264,30 @@ function normalizePreferences(preferences = {}) {
   };
 }
 
+
+function normalizeConnections(connections = {}) {
+  const incomingPeers = connections.peersById && typeof connections.peersById === 'object' ? connections.peersById : {};
+  const peersById = {};
+
+  Object.keys(incomingPeers).forEach((peerId) => {
+    const peer = incomingPeers[peerId] || {};
+    peersById[peerId] = {
+      peerId,
+      displayName: typeof peer.displayName === 'string' ? peer.displayName : '',
+      trustState: ['pending', 'trusted', 'blocked'].includes(peer.trustState) ? peer.trustState : 'pending',
+      lastSyncAt: typeof peer.lastSyncAt === 'string' ? peer.lastSyncAt : '',
+    };
+  });
+
+  return {
+    enabled: Boolean(connections.enabled),
+    peerId: typeof connections.peerId === 'string' && connections.peerId ? connections.peerId : crypto.randomUUID(),
+    displayName: typeof connections.displayName === 'string' ? connections.displayName : '',
+    signalingEndpoint: typeof connections.signalingEndpoint === 'string' ? connections.signalingEndpoint : '',
+    peersById,
+  };
+}
+
 function normalizeComment(comment = {}) {
   return {
     id: typeof comment.id === 'string' ? comment.id : crypto.randomUUID(),
@@ -277,6 +328,7 @@ function normalizeV3(raw = {}) {
     avatarDataUrl: typeof person.avatarDataUrl === 'string' ? person.avatarDataUrl : '',
   })).filter((person) => person.name.trim()) : [];
   normalized.preferences = normalizePreferences(raw.preferences || {});
+  normalized.connections = normalizeConnections(raw.connections || {});
 
   const incomingPostsById = raw.postsById && typeof raw.postsById === 'object' ? raw.postsById : {};
   const incomingOrder = Array.isArray(raw.postOrder) ? raw.postOrder : [];
@@ -354,6 +406,11 @@ async function load() {
   els.profileBio.value = state.data.profile.bio || '';
   els.themeSelect.value = state.data.preferences.theme;
   applyTheme(state.data.preferences.theme);
+  els.connectEnabled.checked = Boolean(state.data.connections.enabled);
+  els.connectDisplayName.value = state.data.connections.displayName || state.data.profile.name || '';
+  els.signalingEndpoint.value = state.data.connections.signalingEndpoint || '';
+  renderConnectionStatus(state.data.connections.enabled ? 'Connection feature is enabled.' : 'Connection disabled.');
+  renderConnectedPeers();
 }
 
 function initials(name) {
@@ -1026,6 +1083,39 @@ document.addEventListener('keydown', (event) => {
   }
 });
 
+
+els.connectEnabled.addEventListener('change', () => {
+  updateState((draft) => {
+    draft.connections.enabled = els.connectEnabled.checked;
+  }, { render: false });
+  renderConnectionStatus(els.connectEnabled.checked ? 'Connection feature enabled.' : 'Connection disabled.');
+  renderConnectedPeers();
+});
+
+els.connectDisplayName.addEventListener('input', () => {
+  updateState((draft) => {
+    draft.connections.displayName = els.connectDisplayName.value.trim();
+  }, { render: false });
+});
+
+els.signalingEndpoint.addEventListener('input', () => {
+  updateState((draft) => {
+    draft.connections.signalingEndpoint = els.signalingEndpoint.value.trim();
+  }, { render: false });
+});
+
+els.startInviteBtn.addEventListener('click', () => {
+  void beginInviteFlow();
+});
+
+els.startJoinBtn.addEventListener('click', () => {
+  void beginJoinFlow();
+});
+
+els.applyCodeBtn.addEventListener('click', () => {
+  void applyPairingCode();
+});
+
 els.themeSelect.addEventListener('change', () => {
   updateState((draft) => {
     draft.preferences.theme = els.themeSelect.value;
@@ -1097,6 +1187,307 @@ els.exportBtn.addEventListener('click', () => {
   a.click();
   URL.revokeObjectURL(url);
 });
+
+
+function encodeSignalPayload(payload) {
+  return btoa(unescape(encodeURIComponent(JSON.stringify(payload))));
+}
+
+function decodeSignalPayload(value) {
+  return JSON.parse(decodeURIComponent(escape(atob(value.trim()))));
+}
+
+function renderConnectionStatus(message, isError = false) {
+  if (!els.connectStatus) return;
+  els.connectStatus.textContent = message;
+  els.connectStatus.classList.toggle('is-error', isError);
+}
+
+function renderConnectedPeers() {
+  if (!els.connectedPeers) return;
+  const peers = Object.values(state.data.connections.peersById || {});
+  els.connectedPeers.innerHTML = '';
+  if (!peers.length) {
+    els.connectedPeers.innerHTML = '<p class="connect-note">No synced peers yet.</p>';
+    return;
+  }
+
+  peers
+    .sort((a, b) => String(b.lastSyncAt || '').localeCompare(String(a.lastSyncAt || '')))
+    .forEach((peer) => {
+      const row = document.createElement('div');
+      row.className = 'connected-peer';
+      const name = document.createElement('strong');
+      name.textContent = peer.displayName || peer.peerId;
+      const meta = document.createElement('span');
+      meta.textContent = `Trust: ${peer.trustState} · Last sync: ${peer.lastSyncAt ? new Date(peer.lastSyncAt).toLocaleString() : 'never'}`;
+      row.append(name, meta);
+      els.connectedPeers.append(row);
+    });
+}
+
+function trackPeerConnection(peerId, displayName, trustState = 'trusted') {
+  updateState((draft) => {
+    const existing = draft.connections.peersById[peerId] || {};
+    draft.connections.peersById[peerId] = {
+      peerId,
+      displayName: displayName || existing.displayName || '',
+      trustState,
+      lastSyncAt: new Date().toISOString(),
+    };
+  }, { render: false });
+  renderConnectedPeers();
+}
+
+async function applyIncomingMemoryShare(message) {
+  const posts = Array.isArray(message.payload?.posts) ? message.payload.posts : [];
+  if (!posts.length) return 0;
+
+  let importedCount = 0;
+  for (const post of posts) {
+    const merged = importMemoryShare({ kind: 'mybook-memory-share', post }, { onConflict: 'generate' });
+    if (merged) importedCount += 1;
+  }
+  return importedCount;
+}
+
+function sendProtocolMessage(type, payload = {}) {
+  const dc = state.connectionRuntime.dc;
+  if (!dc || dc.readyState !== 'open') return;
+  dc.send(JSON.stringify({
+    version: PROTOCOL_VERSION,
+    type,
+    fromPeerId: state.data.connections.peerId,
+    fromDisplayName: state.data.connections.displayName || state.data.profile.name || 'Mybook User',
+    sentAt: new Date().toISOString(),
+    payload,
+  }));
+}
+
+async function handleProtocolMessage(raw) {
+  let msg;
+  try {
+    msg = JSON.parse(raw);
+  } catch {
+    sendProtocolMessage('error', { reason: 'invalid-json' });
+    return;
+  }
+
+  if (msg.version !== PROTOCOL_VERSION || typeof msg.type !== 'string') {
+    sendProtocolMessage('error', { reason: 'unsupported-protocol-version' });
+    return;
+  }
+
+  if (msg.fromPeerId) {
+    state.connectionRuntime.remotePeerId = msg.fromPeerId;
+    trackPeerConnection(msg.fromPeerId, msg.fromDisplayName || '', 'trusted');
+  }
+
+  if (msg.type === 'hello') {
+    sendProtocolMessage('ack', { receivedType: 'hello' });
+    return;
+  }
+
+  if (msg.type === 'memory-share') {
+    const importedCount = await applyIncomingMemoryShare(msg);
+    sendProtocolMessage('ack', { receivedType: 'memory-share', importedCount });
+    renderConnectionStatus(importedCount ? `Synced ${importedCount} memories.` : 'Connected. Nothing new to import.');
+    return;
+  }
+
+  if (msg.type === 'ack') {
+    renderConnectionStatus('Connected and synchronized.');
+  }
+}
+
+function setupDataChannel(dc) {
+  state.connectionRuntime.dc = dc;
+  dc.addEventListener('open', () => {
+    renderConnectionStatus('Secure channel open. Syncing...');
+    sendProtocolMessage('hello', { app: 'mybook' });
+    const posts = state.data.postOrder.slice(0, 50).map((id) => normalizePost(state.data.postsById[id])).filter(Boolean);
+    sendProtocolMessage('memory-share', { posts });
+  });
+  dc.addEventListener('message', (event) => {
+    void handleProtocolMessage(event.data);
+  });
+  dc.addEventListener('close', () => {
+    renderConnectionStatus('Connection closed.');
+  });
+  dc.addEventListener('error', () => {
+    renderConnectionStatus('Connection error. Try pairing again.', true);
+  });
+}
+
+function createPeerConnection() {
+  const pc = new RTCPeerConnection({ iceServers: DEFAULT_ICE_SERVERS });
+  state.connectionRuntime.pc = pc;
+  pc.addEventListener('datachannel', (event) => setupDataChannel(event.channel));
+  return pc;
+}
+
+function waitForIceGatheringComplete(pc, timeoutMs = 6000) {
+  if (pc.iceGatheringState === 'complete') return Promise.resolve();
+
+  return new Promise((resolve) => {
+    const timeout = setTimeout(() => {
+      cleanup();
+      resolve();
+    }, timeoutMs);
+
+    const onChange = () => {
+      if (pc.iceGatheringState === 'complete') {
+        cleanup();
+        resolve();
+      }
+    };
+
+    const cleanup = () => {
+      clearTimeout(timeout);
+      pc.removeEventListener('icegatheringstatechange', onChange);
+    };
+
+    pc.addEventListener('icegatheringstatechange', onChange);
+  });
+}
+
+async function pushSignal(endpoint, message) {
+  if (!endpoint) return;
+  await fetch(endpoint, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(message),
+  });
+}
+
+async function pollSignal(endpoint, sessionId, role) {
+  if (!endpoint) return;
+  const poll = async () => {
+    try {
+      const url = new URL(endpoint);
+      url.searchParams.set('sessionId', sessionId);
+      url.searchParams.set('role', role);
+      const res = await fetch(url.toString());
+      if (!res.ok) return;
+      const items = await res.json();
+      const messages = Array.isArray(items) ? items : [];
+      for (const item of messages) {
+        if (!state.connectionRuntime.pc) continue;
+        if (item.type === 'answer' && !state.connectionRuntime.pc.currentRemoteDescription) {
+          await state.connectionRuntime.pc.setRemoteDescription(item.payload);
+          renderConnectionStatus('Answer received from signaling endpoint. Waiting for channel...');
+        }
+        if (item.type === 'offer' && !state.connectionRuntime.pc.currentRemoteDescription) {
+          await state.connectionRuntime.pc.setRemoteDescription(item.payload);
+          const answer = await state.connectionRuntime.pc.createAnswer();
+          await state.connectionRuntime.pc.setLocalDescription(answer);
+          await waitForIceGatheringComplete(state.connectionRuntime.pc);
+          await pushSignal(endpoint, { sessionId, type: 'answer', payload: state.connectionRuntime.pc.localDescription });
+          renderConnectionStatus('Offer received from signaling endpoint. Answer posted.');
+        }
+      }
+    } catch {
+      // no-op fallback to manual code
+    }
+  };
+  await poll();
+  if (state.connectionRuntime.pollTimer) clearInterval(state.connectionRuntime.pollTimer);
+  state.connectionRuntime.pollTimer = setInterval(poll, 2500);
+}
+
+async function beginInviteFlow() {
+  if (!state.data.connections.enabled) {
+    toast('Enable Connect with someone first.', 'warn');
+    return;
+  }
+
+  const pc = createPeerConnection();
+  const dc = pc.createDataChannel('mybook-sync');
+  setupDataChannel(dc);
+
+  const offer = await pc.createOffer();
+  await pc.setLocalDescription(offer);
+  await waitForIceGatheringComplete(pc);
+
+  const sessionId = crypto.randomUUID();
+  state.connectionRuntime.mode = 'invite';
+  state.connectionRuntime.signalingRole = 'offerer';
+  state.connectionRuntime.sessionId = sessionId;
+
+  const invite = {
+    v: PROTOCOL_VERSION,
+    role: 'invite',
+    sessionId,
+    offer: pc.localDescription,
+    fromPeerId: state.data.connections.peerId,
+    fromDisplayName: state.data.connections.displayName || state.data.profile.name || 'Mybook User',
+  };
+
+  els.inviteCodeInput.value = encodeSignalPayload(invite);
+  await pushSignal(state.data.connections.signalingEndpoint, { sessionId, type: 'offer', payload: invite.offer });
+  await pollSignal(state.data.connections.signalingEndpoint, sessionId, 'offerer');
+  renderConnectionStatus('Invite code ready. Share it, then paste back the answer code.');
+}
+
+async function beginJoinFlow() {
+  if (!state.data.connections.enabled) {
+    toast('Enable Connect with someone first.', 'warn');
+    return;
+  }
+  renderConnectionStatus('Paste an invite code, then press Apply code to generate an answer.');
+}
+
+async function applyPairingCode() {
+  if (!state.data.connections.enabled) {
+    toast('Enable Connect with someone first.', 'warn');
+    return;
+  }
+
+  let payload;
+  try {
+    payload = decodeSignalPayload(els.inviteCodeInput.value || '');
+  } catch {
+    toast('That code is not valid.', 'error');
+    return;
+  }
+
+  try {
+    if (payload.role === 'invite' && payload.offer) {
+      const pc = createPeerConnection();
+      state.connectionRuntime.mode = 'join';
+      state.connectionRuntime.signalingRole = 'answerer';
+      state.connectionRuntime.sessionId = payload.sessionId || crypto.randomUUID();
+      await pc.setRemoteDescription(payload.offer);
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      await waitForIceGatheringComplete(pc);
+
+      const answerPayload = {
+        v: PROTOCOL_VERSION,
+        role: 'answer',
+        sessionId: state.connectionRuntime.sessionId,
+        answer: pc.localDescription,
+        fromPeerId: state.data.connections.peerId,
+        fromDisplayName: state.data.connections.displayName || state.data.profile.name || 'Mybook User',
+      };
+
+      els.inviteCodeInput.value = encodeSignalPayload(answerPayload);
+      await pushSignal(state.data.connections.signalingEndpoint, { sessionId: state.connectionRuntime.sessionId, type: 'answer', payload: answerPayload.answer });
+      renderConnectionStatus('Answer code generated. Send it back to the inviter.');
+      return;
+    }
+
+    if (payload.role === 'answer' && payload.answer && state.connectionRuntime.pc) {
+      await state.connectionRuntime.pc.setRemoteDescription(payload.answer);
+      renderConnectionStatus('Answer accepted. Waiting for channel...');
+      return;
+    }
+
+    toast('Unsupported code payload.', 'error');
+  } catch {
+    renderConnectionStatus('Could not apply this pairing code. Regenerate and try again.', true);
+  }
+}
 
 function normalizeImportPayload(raw) {
   if (!raw || typeof raw !== 'object') return makeDefaultData();
@@ -1187,10 +1578,12 @@ function downloadMemoryShare(post) {
   URL.revokeObjectURL(url);
 }
 
-function importMemoryShare(raw) {
+function importMemoryShare(raw, options = {}) {
   const incomingPost = raw && raw.post ? normalizePost(raw.post) : null;
   if (!incomingPost || (!incomingPost.text && incomingPost.media.length === 0)) return false;
 
+  const { onConflict = 'generate' } = options;
+  if (state.data.postsById[incomingPost.id] && onConflict === 'skip') return false;
   const incomingId = state.data.postsById[incomingPost.id] ? crypto.randomUUID() : incomingPost.id;
   const postToInsert = { ...incomingPost, id: incomingId };
   return updateState((draft) => {
@@ -1233,6 +1626,10 @@ async function handleImportFile(event, mode = 'auto') {
     els.profileName.value = state.data.profile.name;
     els.profileBio.value = state.data.profile.bio;
     els.themeSelect.value = state.data.preferences.theme;
+    els.connectEnabled.checked = Boolean(state.data.connections.enabled);
+    els.connectDisplayName.value = state.data.connections.displayName || state.data.profile.name || '';
+    els.signalingEndpoint.value = state.data.connections.signalingEndpoint || '';
+    renderConnectedPeers();
     applyTheme(state.data.preferences.theme);
     renderPeopleList();
     renderPostPeopleMenu();
