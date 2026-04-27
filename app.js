@@ -384,6 +384,13 @@ async function clearAppCaches() {
   await Promise.all(keys.filter((key) => key.startsWith('mybook-cache-')).map((key) => caches.delete(key)));
 }
 
+function wipeLocalAppData() {
+  revokeAllObjectUrls();
+  localStorage.removeItem(STORAGE_KEY_V3);
+  localStorage.removeItem(STORAGE_KEY_V2);
+  if ('indexedDB' in window) indexedDB.deleteDatabase(MEDIA_DB_NAME);
+}
+
 function save() {
   localStorage.setItem(STORAGE_KEY_V3, JSON.stringify(state.data));
 }
@@ -1769,10 +1776,7 @@ els.settingsClearBtn.addEventListener('click', () => {
       showCancel: true,
     });
     if (!confirmed) return;
-    revokeAllObjectUrls();
-    localStorage.removeItem(STORAGE_KEY_V3);
-    localStorage.removeItem(STORAGE_KEY_V2);
-    if ('indexedDB' in window) indexedDB.deleteDatabase(MEDIA_DB_NAME);
+    wipeLocalAppData();
     location.reload();
   })();
 });
