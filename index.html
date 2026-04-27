@@ -11,7 +11,7 @@
   <link rel="manifest" href="manifest.webmanifest" />
   <link rel="stylesheet" href="styles.css" />
 </head>
-<body>
+<body class="app-locked">
   <header class="topbar">
     <div class="brand">mybook</div>
     <div class="top-actions">
@@ -19,6 +19,7 @@
         <button id="accountMenuBtn" class="ghost account-trigger" type="button" aria-haspopup="menu" aria-expanded="false">Account ⚙️</button>
         <div id="accountMenu" class="account-menu hidden" role="menu">
           <button id="settingsBtn" class="menu-item" type="button" role="menuitem">Settings</button>
+          <button id="appLockMenuBtn" class="menu-item" type="button" role="menuitem">App lock</button>
           <button id="updateAppBtn" class="menu-item" type="button" role="menuitem">Update app</button>
           <button id="exportBtn" class="menu-item" type="button" role="menuitem">Export backup</button>
           <label class="menu-item import-label" role="menuitem">Import memory<input id="importMemoryFile" type="file" accept="application/json" hidden /></label>
@@ -101,8 +102,31 @@
         <p id="connectStatus" class="connect-status">Connection disabled.</p>
       </section>
 
+      <section id="securityPanel" class="security-panel">
+        <div class="connect-panel-head">
+          <h3>App lock</h3>
+          <label class="connect-toggle">
+            <input id="appLockEnabled" type="checkbox" />
+            <span>Enable</span>
+          </label>
+        </div>
+        <p class="connect-note">Require your password before the app contents are shown.</p>
+        <button id="appLockPasswordBtn" class="ghost" type="button">Set password</button>
+      </section>
+
       <button id="settingsClearBtn" class="danger" type="button">Clear all memories</button>
     </div>
+  </div>
+
+  <div id="lockScreen" class="lock-screen hidden" role="dialog" aria-modal="true" aria-labelledby="lockScreenTitle">
+    <form id="lockForm" class="lock-card">
+      <h2 id="lockScreenTitle">App locked</h2>
+      <p>Enter your password to open mybook.</p>
+      <input id="lockPasswordInput" type="password" autocomplete="current-password" placeholder="Password" />
+      <button type="submit" class="primary">Unlock</button>
+      <button id="lockResetBtn" type="button" class="danger">Forgot passcode? Reset this device data</button>
+      <p id="lockError" class="lock-error hidden">Enter your passcode, or reset local device data.</p>
+    </form>
   </div>
 
   <div id="personModal" class="settings-modal hidden" role="dialog" aria-modal="true" aria-labelledby="personModalTitle">

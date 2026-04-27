@@ -50,8 +50,10 @@ const els = {
   clearFilterBtn: document.getElementById('clearFilterBtn'),
   postTemplate: document.getElementById('postTemplate'),
   settingsBtn: document.getElementById('settingsBtn'),
+  appLockMenuBtn: document.getElementById('appLockMenuBtn'),
   settingsModal: document.getElementById('settingsModal'),
   settingsPanel: document.querySelector('#settingsModal .settings-panel'),
+  securityPanel: document.getElementById('securityPanel'),
   settingsCloseBtn: document.getElementById('settingsCloseBtn'),
   themeSelect: document.getElementById('themeSelect'),
   settingsClearBtn: document.getElementById('settingsClearBtn'),
@@ -68,8 +70,15 @@ const els = {
   applyCodeBtn: document.getElementById('applyCodeBtn'),
   directNotesList: document.getElementById('directNotesList'),
   connectStatus: document.getElementById('connectStatus'),
+  appLockEnabled: document.getElementById('appLockEnabled'),
+  appLockPasswordBtn: document.getElementById('appLockPasswordBtn'),
   accountMenuBtn: document.getElementById('accountMenuBtn'),
   accountMenu: document.getElementById('accountMenu'),
+  lockScreen: document.getElementById('lockScreen'),
+  lockForm: document.getElementById('lockForm'),
+  lockPasswordInput: document.getElementById('lockPasswordInput'),
+  lockResetBtn: document.getElementById('lockResetBtn'),
+  lockError: document.getElementById('lockError'),
   messageModal: document.getElementById('messageModal'),
   messageModalTitle: document.getElementById('messageModalTitle'),
   messageModalText: document.getElementById('messageModalText'),
@@ -107,6 +116,10 @@ function makeDefaultData() {
     postOrder: [],
     preferences: {
       theme: 'system',
+      security: {
+        lockEnabled: false,
+        passwordHash: '',
+      },
     },
     connections: {
       enabled: false,
@@ -372,6 +385,13 @@ async function clearAppCaches() {
   await Promise.all(keys.filter((key) => key.startsWith('mybook-cache-')).map((key) => caches.delete(key)));
 }
 
+function wipeLocalAppData() {
+  revokeAllObjectUrls();
+  localStorage.removeItem(STORAGE_KEY_V3);
+  localStorage.removeItem(STORAGE_KEY_V2);
+  if ('indexedDB' in window) indexedDB.deleteDatabase(MEDIA_DB_NAME);
+}
+
 function save() {
   localStorage.setItem(STORAGE_KEY_V3, JSON.stringify(state.data));
 }
@@ -397,6 +417,79 @@ function updateState(mutator, options = {}) {
   return true;
 }
 
+function getSecurityPrefs() {
+  const security = state.data?.preferences?.security || {};
+  return {
+    lockEnabled: Boolean(security.lockEnabled),
+    passwordHash: typeof security.passwordHash === 'string' ? security.passwordHash : '',
+  };
+}
+
+function syncSecurityControls() {
+  const { lockEnabled, passwordHash } = getSecurityPrefs();
+  els.appLockEnabled.checked = lockEnabled;
+  els.appLockPasswordBtn.disabled = !lockEnabled;
+  if (!lockEnabled) {
+    els.appLockPasswordBtn.textContent = 'Enable App lock to set passcode';
+    return;
+  }
+  els.appLockPasswordBtn.textContent = passwordHash ? 'Change passcode' : 'Set passcode';
+}
+
+async function sha256Hex(value) {
+  const bytes = new TextEncoder().encode(value);
+  const hashBuffer = await crypto.subtle.digest('SHA-256', bytes);
+  return [...new Uint8Array(hashBuffer)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+async function verifyLockPassword(input) {
+  const { passwordHash } = getSecurityPrefs();
+  if (!passwordHash) return false;
+  const inputHash = await sha256Hex(input);
+  return inputHash === passwordHash;
+}
+
+function lockUi() {
+  document.body.classList.add('app-locked');
+}
+
+function unlockUi() {
+  document.body.classList.remove('app-locked');
+}
+
+function showLockError(message) {
+  els.lockError.textContent = message;
+  els.lockError.classList.remove('hidden');
+}
+
+async function promptNewLockPassword() {
+  const first = await showModalMessage({
+    title: 'Set app password',
+    message: 'Create a password for unlocking this app on this device.',
+    confirmText: 'Next',
+    cancelText: 'Cancel',
+    showCancel: true,
+    input: { placeholder: 'New password', defaultValue: '' },
+  });
+  if (!first) return '';
+
+  const second = await showModalMessage({
+    title: 'Confirm password',
+    message: 'Enter the same password again.',
+    confirmText: 'Save password',
+    cancelText: 'Cancel',
+    showCancel: true,
+    input: { placeholder: 'Confirm password', defaultValue: '' },
+  });
+
+  if (!second) return '';
+  if (first !== second) {
+    toast('Passwords did not match.', 'warn');
+    return '';
+  }
+  return first;
+}
+
 function normalizeProfile(profile = {}) {
   const avatarDataUrl =
     typeof profile.avatarDataUrl === 'string'
@@ -415,11 +508,16 @@ function normalizeProfile(profile = {}) {
 function normalizePreferences(preferences = {}) {
   const theme = typeof preferences.theme === 'string' ? preferences.theme : 'system';
   const normalizedTheme = ['light', 'dark', 'system'].includes(theme) ? theme : 'system';
+  const security = preferences.security && typeof preferences.security === 'object' ? preferences.security : {};
 
   return {
     ...makeDefaultData().preferences,
     ...(preferences && typeof preferences === 'object' ? preferences : {}),
     theme: normalizedTheme,
+    security: {
+      lockEnabled: Boolean(security.lockEnabled),
+      passwordHash: typeof security.passwordHash === 'string' ? security.passwordHash : '',
+    },
   };
 }
 
@@ -651,6 +749,7 @@ async function load() {
   els.connectEnabled.checked = Boolean(state.data.connections.enabled);
   els.connectDisplayName.value = state.data.connections.displayName || state.data.profile.name || '';
   els.signalingEndpoint.value = state.data.connections.signalingEndpoint || '';
+  syncSecurityControls();
   renderDirectNotesList();
   renderConnectionStatus(state.data.connections.enabled ? 'Connection feature is enabled.' : 'Connection disabled.');
 }
@@ -1538,6 +1637,17 @@ document.addEventListener('click', (event) => {
 els.settingsBtn.addEventListener('click', () => {
   openSettings();
 });
+els.appLockMenuBtn.addEventListener('click', () => {
+  closeAccountMenu();
+  openSettings();
+  if (els.securityPanel) {
+    els.securityPanel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    els.securityPanel.classList.remove('focus-pulse');
+    requestAnimationFrame(() => {
+      els.securityPanel.classList.add('focus-pulse');
+    });
+  }
+});
 els.settingsCloseBtn.addEventListener('click', closeSettings);
 els.settingsModal.addEventListener('click', (event) => {
   if (event.target === els.settingsModal) {
@@ -1592,6 +1702,78 @@ els.themeSelect.addEventListener('change', () => {
   applyTheme(state.data.preferences.theme);
 });
 
+els.appLockPasswordBtn.addEventListener('click', () => {
+  void (async () => {
+    if (!getSecurityPrefs().lockEnabled) {
+      toast('Enable App lock first, then set your passcode.', 'warn');
+      return;
+    }
+    const nextPassword = await promptNewLockPassword();
+    if (!nextPassword) return;
+    const hash = await sha256Hex(nextPassword);
+    updateState((draft) => {
+      draft.preferences.security.passwordHash = hash;
+    }, { render: false });
+    syncSecurityControls();
+    toast('Passcode saved.');
+  })();
+});
+
+els.appLockEnabled.addEventListener('change', () => {
+  void (async () => {
+    const wantsEnabled = els.appLockEnabled.checked;
+    const security = getSecurityPrefs();
+
+    if (wantsEnabled && !security.passwordHash) {
+      const nextPassword = await promptNewLockPassword();
+      if (!nextPassword) {
+        syncSecurityControls();
+        return;
+      }
+      const hash = await sha256Hex(nextPassword);
+      updateState((draft) => {
+        draft.preferences.security.lockEnabled = true;
+        draft.preferences.security.passwordHash = hash;
+      }, { render: false });
+      syncSecurityControls();
+      toast('App lock enabled and passcode saved.');
+      return;
+    }
+
+    if (!wantsEnabled && security.lockEnabled) {
+      const entered = await showModalMessage({
+        title: 'Disable app lock',
+        message: 'Enter your current password to disable app lock.',
+        confirmText: 'Disable',
+        cancelText: 'Cancel',
+        showCancel: true,
+        input: { placeholder: 'Current password', defaultValue: '' },
+      });
+      if (!entered) {
+        syncSecurityControls();
+        return;
+      }
+      const valid = await verifyLockPassword(entered);
+      if (!valid) {
+        toast('Incorrect password. App lock stays enabled.', 'error');
+        syncSecurityControls();
+        return;
+      }
+      updateState((draft) => {
+        draft.preferences.security.lockEnabled = false;
+      }, { render: false });
+      syncSecurityControls();
+      toast('App lock disabled.');
+      return;
+    }
+
+    updateState((draft) => {
+      draft.preferences.security.lockEnabled = wantsEnabled;
+    }, { render: false });
+    syncSecurityControls();
+  })();
+});
+
 window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
   if (state.data.preferences.theme === 'system') {
     applyTheme('system');
@@ -1608,10 +1790,7 @@ els.settingsClearBtn.addEventListener('click', () => {
       showCancel: true,
     });
     if (!confirmed) return;
-    revokeAllObjectUrls();
-    localStorage.removeItem(STORAGE_KEY_V3);
-    localStorage.removeItem(STORAGE_KEY_V2);
-    if ('indexedDB' in window) indexedDB.deleteDatabase(MEDIA_DB_NAME);
+    wipeLocalAppData();
     location.reload();
   })();
 });
@@ -2631,6 +2810,61 @@ els.importFile.addEventListener('change', (event) => {
   handleImportFile(event, 'auto');
 });
 
+async function requireAppUnlockIfNeeded() {
+  const { lockEnabled, passwordHash } = getSecurityPrefs();
+  if (!lockEnabled || !passwordHash) {
+    unlockUi();
+    return;
+  }
+
+  lockUi();
+  els.lockError.classList.add('hidden');
+  els.lockError.textContent = 'Enter your passcode, or reset local device data.';
+  els.lockPasswordInput.value = '';
+  els.lockScreen.classList.remove('hidden');
+  els.lockPasswordInput.focus();
+
+  await new Promise((resolve) => {
+    const teardown = () => {
+      els.lockForm.removeEventListener('submit', onSubmit);
+      els.lockResetBtn.removeEventListener('click', onReset);
+    };
+    const onSubmit = async (event) => {
+      event.preventDefault();
+      const candidate = (els.lockPasswordInput.value || '').trim();
+      if (!candidate) {
+        showLockError('Enter your passcode, or tap reset if you forgot it.');
+        return;
+      }
+      const isValid = await verifyLockPassword(candidate);
+      if (!isValid) {
+        showLockError('Incorrect passcode. Try again, or reset local data.');
+        els.lockPasswordInput.select();
+        return;
+      }
+      teardown();
+      resolve();
+    };
+    const onReset = async () => {
+      const confirmed = await showModalMessage({
+        title: 'Reset locked app data?',
+        message: 'If you forgot your passcode, you can reset this device data. This erases local profile, people, and memories on this device.',
+        confirmText: 'Reset device data',
+        cancelText: 'Cancel',
+        showCancel: true,
+      });
+      if (!confirmed) return;
+      wipeLocalAppData();
+      location.reload();
+    };
+    els.lockForm.addEventListener('submit', onSubmit);
+    els.lockResetBtn.addEventListener('click', onReset);
+  });
+
+  els.lockScreen.classList.add('hidden');
+  unlockUi();
+}
+
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('sw.js').catch(() => {});
 }
@@ -2648,6 +2882,7 @@ async function init() {
   renderDirectNotesList();
   renderPostPeopleMenu();
   renderPosts();
+  await requireAppUnlockIfNeeded();
 }
 
 init();
