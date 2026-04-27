@@ -41,7 +41,10 @@
     </aside>
 
     <section class="feed">
-      <button id="openComposeBtn" class="primary compose-launch" type="button">Compose memory</button>
+      <div class="compose-actions">
+        <button id="openComposeBtn" class="primary compose-launch" type="button">Compose memory</button>
+        <button id="openVibeCheckBtn" class="ghost compose-launch" type="button">✨ Vibe Check</button>
+      </div>
 
       <div class="filters">
         <input id="searchInput" type="search" placeholder="Search memories..." />
@@ -173,6 +176,67 @@
         <div class="composer-tools">
           <label class="tool-upload">📷 Photo/Video<input id="postMedia" type="file" accept="image/*,video/*" multiple hidden /></label>
           <div id="mediaPreview" class="media-preview"></div>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div id="vibeCheckModal" class="settings-modal hidden" role="dialog" aria-modal="true" aria-labelledby="vibeCheckModalTitle">
+    <div class="settings-panel vibe-check-panel" role="document">
+      <div class="settings-head">
+        <h2 id="vibeCheckModalTitle">✨ Vibe Check</h2>
+        <button id="vibeCheckModalCloseBtn" class="action-btn" type="button" aria-label="Close vibe check">✕</button>
+      </div>
+
+      <div class="vibe-check-progress">
+        <span class="vibe-step-dot active"></span>
+        <span class="vibe-step-dot"></span>
+        <span class="vibe-step-dot"></span>
+      </div>
+
+      <form id="vibeCheckForm" class="vibe-check-form">
+        <section class="vibe-step" data-step="0">
+          <h3>How are you feeling right now? 💛</h3>
+          <p class="vibe-help">Pick the emoji that matches your mood the best.</p>
+          <div class="vibe-mood-grid">
+            <label><input type="radio" name="vibeMood" value="😄 Energized" required /> 😄 Energized</label>
+            <label><input type="radio" name="vibeMood" value="🙂 Steady" /> 🙂 Steady</label>
+            <label><input type="radio" name="vibeMood" value="😌 Calm" /> 😌 Calm</label>
+            <label><input type="radio" name="vibeMood" value="😵 Overwhelmed" /> 😵 Overwhelmed</label>
+            <label><input type="radio" name="vibeMood" value="😔 Low" /> 😔 Low</label>
+            <label><input type="radio" name="vibeMood" value="🤷 Mixed" /> 🤷 Mixed</label>
+          </div>
+        </section>
+
+        <section class="vibe-step hidden" data-step="1">
+          <h3>What is your motivation level? 🚀</h3>
+          <p class="vibe-help">Move the slider to check in with your momentum.</p>
+          <label class="vibe-slider-wrap" for="vibeMotivation">
+            <input id="vibeMotivation" name="vibeMotivation" type="range" min="1" max="10" value="6" />
+            <div><strong id="vibeMotivationValue">6</strong>/10</div>
+          </label>
+          <label class="settings-label" for="vibeEnergy">Energy today ⚡</label>
+          <select id="vibeEnergy" class="settings-select" name="vibeEnergy">
+            <option value="High">High</option>
+            <option value="Medium" selected>Medium</option>
+            <option value="Low">Low</option>
+          </select>
+        </section>
+
+        <section class="vibe-step hidden" data-step="2">
+          <h3>Reflect for a minute 📝</h3>
+          <label class="settings-label" for="vibeWin">One small win today</label>
+          <input id="vibeWin" class="settings-select" name="vibeWin" type="text" maxlength="120" placeholder="I finished..." />
+          <label class="settings-label" for="vibeNeed">What would help you most next?</label>
+          <input id="vibeNeed" class="settings-select" name="vibeNeed" type="text" maxlength="120" placeholder="I need..." />
+          <label class="settings-label" for="vibeNotes">Anything else on your mind?</label>
+          <textarea id="vibeNotes" class="settings-select" name="vibeNotes" rows="3" maxlength="300" placeholder="Optional thoughts..."></textarea>
+        </section>
+
+        <div class="vibe-actions">
+          <button id="vibeBackBtn" class="ghost" type="button">Back</button>
+          <button id="vibeNextBtn" class="primary" type="button">Next</button>
+          <button id="vibeSubmitBtn" class="primary hidden" type="submit">Post vibe check</button>
         </div>
       </form>
     </div>

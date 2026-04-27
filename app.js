@@ -27,8 +27,17 @@ const els = {
   postMedia: document.getElementById('postMedia'),
   mediaPreview: document.getElementById('mediaPreview'),
   openComposeBtn: document.getElementById('openComposeBtn'),
+  openVibeCheckBtn: document.getElementById('openVibeCheckBtn'),
   composeModal: document.getElementById('composeModal'),
   composeModalCloseBtn: document.getElementById('composeModalCloseBtn'),
+  vibeCheckModal: document.getElementById('vibeCheckModal'),
+  vibeCheckModalCloseBtn: document.getElementById('vibeCheckModalCloseBtn'),
+  vibeCheckForm: document.getElementById('vibeCheckForm'),
+  vibeBackBtn: document.getElementById('vibeBackBtn'),
+  vibeNextBtn: document.getElementById('vibeNextBtn'),
+  vibeSubmitBtn: document.getElementById('vibeSubmitBtn'),
+  vibeMotivation: document.getElementById('vibeMotivation'),
+  vibeMotivationValue: document.getElementById('vibeMotivationValue'),
   searchInput: document.getElementById('searchInput'),
   sortSelect: document.getElementById('sortSelect'),
   openFilterBtn: document.getElementById('openFilterBtn'),
@@ -89,6 +98,7 @@ const state = {
   activeFilters: { tags: [], peopleIds: [] },
   pendingPersonAvatarDataUrl: '',
   editingPersonId: '',
+  activeVibeStep: 0,
   connectionRuntime: {
     mode: '',
     signalingRole: '',
@@ -1141,6 +1151,58 @@ function closeComposeModal() {
   closeModalOverlay(els.composeModal);
 }
 
+function syncVibeCheckUi() {
+  const steps = Array.from(document.querySelectorAll('.vibe-step'));
+  const dots = Array.from(document.querySelectorAll('.vibe-step-dot'));
+  steps.forEach((stepNode, index) => {
+    stepNode.classList.toggle('hidden', index !== state.activeVibeStep);
+  });
+  dots.forEach((dot, index) => {
+    dot.classList.toggle('active', index === state.activeVibeStep);
+  });
+  els.vibeBackBtn.classList.toggle('hidden', state.activeVibeStep === 0);
+  els.vibeNextBtn.classList.toggle('hidden', state.activeVibeStep >= steps.length - 1);
+  els.vibeSubmitBtn.classList.toggle('hidden', state.activeVibeStep < steps.length - 1);
+}
+
+function resetVibeCheckForm() {
+  els.vibeCheckForm.reset();
+  if (els.vibeMotivationValue) els.vibeMotivationValue.textContent = '6';
+  state.activeVibeStep = 0;
+  syncVibeCheckUi();
+}
+
+function openVibeCheckModal() {
+  resetVibeCheckForm();
+  openModalOverlay(els.vibeCheckModal);
+}
+
+function closeVibeCheckModal() {
+  closeModalOverlay(els.vibeCheckModal);
+}
+
+function createPostEntry({
+  text = '',
+  date = '',
+  tags = [],
+  peopleIds = [],
+  media = [],
+}) {
+  const trimmedText = text.trim();
+  if (!trimmedText && (!Array.isArray(media) || media.length === 0)) return null;
+  return normalizePost({
+    id: crypto.randomUUID(),
+    text: trimmedText,
+    date,
+    createdAt: new Date().toISOString(),
+    tags,
+    peopleIds,
+    media,
+    reactions: {},
+    comments: [],
+  });
+}
+
 function openAccountMenu() {
   els.accountMenu.classList.remove('hidden');
   els.accountMenuBtn.setAttribute('aria-expanded', 'true');
@@ -1506,17 +1568,14 @@ els.postForm.addEventListener('submit', async (event) => {
     return;
   }
 
-  const post = normalizePost({
-    id: crypto.randomUUID(),
+  const post = createPostEntry({
     text,
     date: els.postDate.value,
-    createdAt: new Date().toISOString(),
     tags: els.postTags.value.split(',').map((tag) => tag.trim()).filter(Boolean),
     peopleIds: state.selectedPostPeople,
     media: mediaRefs,
-    reactions: {},
-    comments: [],
   });
+  if (!post) return;
 
   const updated = updateState((draft) => {
     draft.postsById[post.id] = post;
@@ -1554,9 +1613,72 @@ els.addPersonBtn.addEventListener('click', () => {
 });
 
 els.openComposeBtn.addEventListener('click', openComposeModal);
+els.openVibeCheckBtn.addEventListener('click', openVibeCheckModal);
 els.composeModalCloseBtn.addEventListener('click', closeComposeModal);
 els.composeModal.addEventListener('click', (event) => {
   if (event.target === els.composeModal) closeComposeModal();
+});
+els.vibeCheckModalCloseBtn.addEventListener('click', closeVibeCheckModal);
+els.vibeCheckModal.addEventListener('click', (event) => {
+  if (event.target === els.vibeCheckModal) closeVibeCheckModal();
+});
+els.vibeBackBtn.addEventListener('click', () => {
+  state.activeVibeStep = Math.max(0, state.activeVibeStep - 1);
+  syncVibeCheckUi();
+});
+els.vibeNextBtn.addEventListener('click', () => {
+  if (state.activeVibeStep === 0) {
+    const mood = els.vibeCheckForm.elements.vibeMood.value;
+    if (!mood) {
+      toast('Pick a mood to continue.', 'warn');
+      return;
+    }
+  }
+  state.activeVibeStep = Math.min(2, state.activeVibeStep + 1);
+  syncVibeCheckUi();
+});
+els.vibeMotivation.addEventListener('input', () => {
+  els.vibeMotivationValue.textContent = els.vibeMotivation.value;
+});
+els.vibeCheckForm.addEventListener('submit', (event) => {
+  event.preventDefault();
+  const mood = els.vibeCheckForm.elements.vibeMood.value;
+  if (!mood) {
+    toast('Pick a mood to post your vibe check.', 'warn');
+    state.activeVibeStep = 0;
+    syncVibeCheckUi();
+    return;
+  }
+
+  const motivation = els.vibeCheckForm.elements.vibeMotivation.value;
+  const energy = els.vibeCheckForm.elements.vibeEnergy.value;
+  const win = els.vibeCheckForm.elements.vibeWin.value.trim();
+  const need = els.vibeCheckForm.elements.vibeNeed.value.trim();
+  const notes = els.vibeCheckForm.elements.vibeNotes.value.trim();
+
+  const lines = [
+    '✨ Vibe Check',
+    `Mood: ${mood}`,
+    `Motivation: ${motivation}/10`,
+    `Energy: ${energy} ⚡`,
+    win ? `Small win: ${win} 🏆` : '',
+    need ? `What I need next: ${need} 🤝` : '',
+    notes ? `Notes: ${notes}` : '',
+  ].filter(Boolean);
+
+  const post = createPostEntry({
+    text: lines.join('\n'),
+    date: new Date().toISOString().slice(0, 10),
+    tags: ['vibe-check', 'check-in'],
+  });
+  if (!post) return;
+
+  updateState((draft) => {
+    draft.postsById[post.id] = post;
+    draft.postOrder.unshift(post.id);
+  });
+  closeVibeCheckModal();
+  toast('Vibe check saved 💛');
 });
 
 els.personModalCloseBtn.addEventListener('click', () => closeModalOverlay(els.personModal));
@@ -1687,6 +1809,9 @@ document.addEventListener('keydown', (event) => {
   }
   if (event.key === 'Escape' && !els.composeModal.classList.contains('hidden')) {
     closeComposeModal();
+  }
+  if (event.key === 'Escape' && !els.vibeCheckModal.classList.contains('hidden')) {
+    closeVibeCheckModal();
   }
 });
 
@@ -2771,6 +2896,8 @@ els.importMemoryFile.addEventListener('change', (event) => {
 els.importFile.addEventListener('change', (event) => {
   handleImportFile(event, 'auto');
 });
+
+syncVibeCheckUi();
 
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('sw.js').catch(() => {});
