@@ -538,6 +538,7 @@ function updateState(mutator, options = {}) {
 
   if (render) {
     renderAvatar();
+    renderSpendingDashboard();
     renderPosts();
   }
 
@@ -697,6 +698,13 @@ function normalizePost(post = {}) {
     media: normalizedMedia,
     reactions: normalizeReactions(post.reactions, post.liked),
     comments: Array.isArray(post.comments) ? post.comments.map(normalizeComment).filter((c) => c.text.trim()) : [],
+    spending: post.spending && typeof post.spending === 'object'
+      ? {
+        vendor: typeof post.spending.vendor === 'string' ? post.spending.vendor.trim() : '',
+        amount: Number.isFinite(Number(post.spending.amount)) ? Number(post.spending.amount) : 0,
+        reason: typeof post.spending.reason === 'string' ? post.spending.reason.trim() : '',
+      }
+      : null,
     importedFrom: importedFrom
       ? {
         senderId: typeof importedFrom.senderId === 'string' ? importedFrom.senderId : '',
@@ -2463,6 +2471,7 @@ function applyImportedData(imported) {
   els.signalingEndpoint.value = state.data.connections.signalingEndpoint || '';
   applyTheme(state.data.preferences.theme);
   renderPeopleList();
+  renderSpendingDashboard();
   renderDirectNotesList();
   renderPostPeopleMenu();
   renderFilterPeopleList();
@@ -2914,6 +2923,7 @@ async function init() {
   await migrateLegacyMediaToIndexedDb();
   renderAvatar();
   renderPeopleList();
+  renderSpendingDashboard();
   renderDirectNotesList();
   renderPostPeopleMenu();
   renderPosts();

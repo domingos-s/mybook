@@ -6,6 +6,9 @@ A private, on-device social memory feed with a Facebook-like aesthetic.
 - First-use onboarding prompt for your name (persisted locally)
 - Editable profile name, bio, and uploadable profile picture
 - Create dated memory posts with tags, media, and action bar parity (Like / Comment / Share placeholder)
+- Guided "✨ Vibe Check" flow for mood, motivation, and reflection check-ins
+- Quick "Cha-Ching 🤑" spending entry flow (vendor, amount, reason) saved as posts
+- Home feed spending dashboard cards for today, last 7 days, and lazy 30 days totals
 - Contextual post menu with edit/delete/copy-link placeholder actions
 - Editable and deletable comments with inline editors
 - Top-right account/settings dropdown for settings + backup controls

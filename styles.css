@@ -180,6 +180,27 @@ textarea:focus-visible, input:focus-visible, select:focus-visible {
 .feed { display: flex; flex-direction: column; gap: var(--space-3); }
 .compose-actions { display: flex; gap: 10px; flex-wrap: wrap; }
 .compose-launch { align-self: flex-start; }
+.spending-dashboard {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+.spending-stat {
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 12px;
+}
+.spending-stat h3 {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-2);
+}
+.spending-stat p {
+  margin: 6px 0 0;
+  font-size: 24px;
+  font-weight: 800;
+}
 .composer { padding: var(--space-3); }
 .composer textarea, .filters input, .filters select, .composer input {
   border: 1px solid var(--border);
